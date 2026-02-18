@@ -1,40 +1,39 @@
-# Internal Company Chatbot — Gemini + RAG + Streamlit
+# Aria — Internal Company AI Assistant
 
-A simple, AI-powered internal company assistant built for local use with a modern Python stack.
-
----
-
-## Stack
-
--   **LLM:** Gemini 2.5 Flash (`gemini-2.5-flash`)
--   **Backend:** FastAPI
--   **Vector DB:** ChromaDB (Local, persists to `backend/data/chroma_db/`)
--   **Embeddings:** Sentence Transformers (`all-MiniLM-L6-v2`)
--   **Frontend:** Streamlit
--   **Tools:** `python-dotenv`, `pydantic`, `uvicorn`, `requests`
+AI-powered internal chatbot using Retrieval-Augmented Generation (RAG). 
+Employees ask questions about HR, IT, and company policies and get answers 
+grounded in real company documents — not LLM guesswork.
 
 ---
 
-## Structure
+## Tech Stack
 
+| Component | Technology |
+|-----------|------------|
+| LLM | Gemini 2.5 Flash |
+| Backend | FastAPI |
+| Vector DB | ChromaDB |
+| Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) |
+| Frontend | Streamlit |
+
+---
+
+## Project Structure
 ```
 company-chatbot/
 ├── backend/
-│   ├── main.py              # FastAPI app, triggers indexing on startup
-│   ├── .env                 # GEMINI_API_KEY, MODEL_NAME, paths
+│   ├── main.py              # FastAPI entry point, triggers indexing on startup
 │   ├── core/
-│   │   ├── config.py        # Environment configuration
-│   │   ├── gemini.py        # Gemini client & system prompt loading
-│   │   └── rag.py           # RAG logic: ingestion, retrieval, chunking
+│   │   ├── config.py        # Environment variable loading
+│   │   ├── gemini.py        # Gemini client, prompt building, conversation history
+│   │   └── rag.py           # Document chunking, ChromaDB indexing and retrieval
 │   ├── routes/
-│   │   └── chat.py          # API Endpoints
-│   └── data/
-│       └── docs/            # DROP YOUR .TXT FILES HERE
+│   │   └── chat.py          # /chat endpoints, session management
+│   └── data/docs/           # Drop .txt company documents here
 ├── frontend/
-│   └── app.py               # Streamlit Chat UI
+│   └── app.py               # Streamlit chat UI
 ├── docs/
-│   ├── screenshots/         # Screenshots of the app
-│   └── system_prompt.txt    # Bot persona & rules
+│   └── system_prompt.txt    # Bot persona and rules — no code needed
 └── requirements.txt
 ```
 
@@ -42,63 +41,77 @@ company-chatbot/
 
 ## How It Works
 
-1.  **Startup:** `backend/main.py` scans `backend/data/docs/*.txt`.
-2.  **Ingestion:** Files are chunked (split by paragraphs) and embedded into ChromaDB locally.
-3.  **Chat Loop:**
-    -   User sends message via Streamlit.
-    -   FastAPI backend retrieves top 3 relevant chunks from ChromaDB.
-    -   System prompt (persona) + Retrieved Chunks + User Message are sent to Gemini 2.5 Flash.
-    -   Gemini generates a grounded response.
+**Startup:** `.txt` files in `data/docs/` are chunked, embedded via Sentence 
+Transformers, and stored in ChromaDB. Already-indexed files are skipped.
+
+**Each message:**
+1. ChromaDB converts the query to an embedding, returns top 3 relevant chunks
+2. Chunks + conversation history injected into Gemini prompt
+3. Gemini returns a grounded, document-backed answer
+4. Response saved to session history, returned to Streamlit
+```mermaid
+flowchart LR
+    A[Streamlit UI] -->|POST /chat| B[FastAPI]
+    B --> C[ChromaDB — top 3 chunks]
+    B --> D[Session History]
+    C --> E[Prompt Assembly]
+    D --> E
+    E --> F[Gemini 2.5 Flash]
+    F -->|Answer| A
+```
 
 ---
 
-## Getting Started Locally
-
-### 1. Install Dependencies
+## Setup
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+git clone https://github.com/HardityaGhuman/aria.git
+cd aria
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
 Create `backend/.env`:
 ```ini
 GEMINI_API_KEY=your_key_here
-MODEL_NAME=gemini-2.5-flash
+MODEL_NAME=gemini-2.5-flash-preview-04-17
+DOCS_PATH=./data/docs
+CHROMA_DB_PATH=./data/chroma_db
+SYSTEM_PROMPT_PATH=../docs/system_prompt.txt
+```
+```bash
+# Terminal 1
+cd backend && python main.py
+
+# Terminal 2
+cd frontend && streamlit run app.py
 ```
 
-### 3. Run Backend (Terminal 1)
-```bash
-uvicorn backend.main:app --reload --port 8000
-```
-
-### 4. Run Frontend (Terminal 2)
-```bash
-streamlit run frontend/app.py
-```
-Visit **http://localhost:8501**.
+- Frontend: http://localhost:8501
+- API + docs: http://localhost:8000/docs
 
 ---
 
-## User Interface
+## Screenshots
 
-### Main Chat Interface
-![Main Chat Interface](docs/screenshots/main-chat-interface.jpeg)
-*The main chat interface where users interact with the AI assistant*
+### Chat Interface
+![Main Chat Interface](docs/screenshots/chat-response.jpeg)
 
-
-### Chat Response Example
-![Chat Response](docs/screenshots/chat-response.jpeg)
-*Example of AI assistant responding to a user query with contextual information*
-
-### Settings Configuration
-![Settings](docs/screenshots/settings.jpeg)
-*Interface to check exact chunks of retrieved context*
+### Response with Retrieved Context
+![Chat Response](docs/screenshots/settings.jpeg)
 
 ---
 
-*To add screenshots:*
-1. Take screenshots of your application
-2. Place them in `docs/screenshots/` directory
-3. Update the image paths above accordingly
+## API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/chat` | Send message, get reply + context used |
+| `GET` | `/chat/history/{session_id}` | Get session history |
+| `DELETE` | `/chat/history/{session_id}` | Clear session |
+
+---
+
+## Notes
+
+- Add knowledge: drop `.txt` files into `backend/data/docs/` and restart
+- Change persona: edit `docs/system_prompt.txt`
+- Never commit `.env` or `backend/data/chroma_db/`
