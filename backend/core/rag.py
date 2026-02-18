@@ -3,14 +3,19 @@ import chromadb
 from chromadb.utils import embedding_functions
 from backend.core.config import CHROMA_DB_PATH, DOCS_PATH
 
-# Use Chroma's built-in sentence-transformers embedding (runs locally, free)
-EMBEDDING_FN = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-
+_embedding_fn = None
 _client = None
 _collection = None
 
+def get_embedding_function():
+    global _embedding_fn
+    if _embedding_fn is None:
+        print("Loading embedding model (this may take a moment)...")
+        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        print("Embedding model loaded.")
+    return _embedding_fn
 
 def get_collection():
     global _client, _collection
@@ -18,7 +23,7 @@ def get_collection():
         _client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         _collection = _client.get_or_create_collection(
             name="company_docs",
-            embedding_function=EMBEDDING_FN
+            embedding_function=get_embedding_function()
         )
     return _collection
 
