@@ -7,10 +7,10 @@ A simple, AI-powered internal company assistant built for local use with a moder
 ## Stack
 
 -   **LLM:** Gemini 2.5 Flash (`gemini-2.5-flash`)
--   **Backend:** FastAPI (Port 8000)
+-   **Backend:** FastAPI
 -   **Vector DB:** ChromaDB (Local, persists to `backend/data/chroma_db/`)
 -   **Embeddings:** Sentence Transformers (`all-MiniLM-L6-v2`)
--   **Frontend:** Streamlit (Port 8501)
+-   **Frontend:** Streamlit
 -   **Tools:** `python-dotenv`, `pydantic`, `uvicorn`, `requests`
 
 ---
@@ -33,6 +33,7 @@ company-chatbot/
 ├── frontend/
 │   └── app.py               # Streamlit Chat UI
 ├── docs/
+│   ├── screenshots/         # Screenshots of the app
 │   └── system_prompt.txt    # Bot persona & rules
 └── requirements.txt
 ```
@@ -83,20 +84,17 @@ Visit **http://localhost:8501**.
 ## User Interface
 
 ### Main Chat Interface
-![Main Chat Interface](docs/screenshots/main-chat-interface.png)
+![Main Chat Interface](docs/screenshots/main-chat-interface.jpeg)
 *The main chat interface where users interact with the AI assistant*
 
-### Document Upload Area
-![Document Upload](docs/screenshots/document-upload.png)
-*Area showing where company documents are stored for processing*
 
 ### Chat Response Example
-![Chat Response](docs/screenshots/chat-response.png)
+![Chat Response](docs/screenshots/chat-response.jpeg)
 *Example of AI assistant responding to a user query with contextual information*
 
 ### Settings Configuration
-![Settings](docs/screenshots/settings.png)
-*Configuration interface for API settings and model parameters*
+![Settings](docs/screenshots/settings.jpeg)
+*Interface to check exact chunks of retrieved context*
 
 ---
 
