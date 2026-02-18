@@ -1,6 +1,6 @@
 # Internal Company Chatbot — Gemini + RAG + Streamlit
 
-A simple, AI-powered internal company assistant built with a modern Python stack.
+A simple, AI-powered internal company assistant built for local use with a modern Python stack.
 
 ---
 
@@ -15,7 +15,7 @@ A simple, AI-powered internal company assistant built with a modern Python stack
 
 ---
 
-## 📁 Structure
+## Structure
 
 ```
 company-chatbot/
@@ -80,7 +80,27 @@ Visit **http://localhost:8501**.
 
 ---
 
-## Deployment
+## User Interface
 
-This project is designed to be deployed as **two separate services** (Backend & Frontend).
-See [DEPLOYMENT.md](DEPLOYMENT.md) for a step-by-step guide to hosting on Render.
+### Main Chat Interface
+![Main Chat Interface](docs/screenshots/main-chat-interface.png)
+*The main chat interface where users interact with the AI assistant*
+
+### Document Upload Area
+![Document Upload](docs/screenshots/document-upload.png)
+*Area showing where company documents are stored for processing*
+
+### Chat Response Example
+![Chat Response](docs/screenshots/chat-response.png)
+*Example of AI assistant responding to a user query with contextual information*
+
+### Settings Configuration
+![Settings](docs/screenshots/settings.png)
+*Configuration interface for API settings and model parameters*
+
+---
+
+*To add screenshots:*
+1. Take screenshots of your application
+2. Place them in `docs/screenshots/` directory
+3. Update the image paths above accordingly
