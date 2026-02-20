@@ -6,6 +6,18 @@ grounded in real company documents — not LLM guesswork.
 
 ---
 
+## Project Direction
+
+Evolve from a document focused RAG assistant into a **hybrid AI work assistant**.  
+Alongside grounded policy Q&A, the system is being extended to support **structured data analysis, basic visualizations, and tool-driven workflows** while preserving the current reliable RAG foundation.
+
+**Near-term focus:**
+- Add lightweight analytics capability
+- Enable chart generation from business datasets
+- Keep the architecture modular and production-ready
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
