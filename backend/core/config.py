@@ -5,15 +5,26 @@ import os
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini/gemini-3.5-flash")
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
+EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "true"
 # Base directory is "backend/"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", os.path.join(DATA_DIR, "chroma_db"))
-DOCS_PATH = os.getenv("DOCS_PATH", os.path.join(DATA_DIR, "docs"))
-SYSTEM_PROMPT_PATH = os.getenv("SYSTEM_PROMPT_PATH", os.path.join(os.path.dirname(BASE_DIR), "docs", "system_prompt.txt"))
+def _resolve_backend_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.abspath(os.path.join(BASE_DIR, path))
 
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY is not set. Check your .env file.")
+
+CHROMA_DB_PATH = _resolve_backend_path(os.getenv("CHROMA_DB_PATH", os.path.join(DATA_DIR, "chroma_db")))
+DOCS_PATH = _resolve_backend_path(os.getenv("DOCS_PATH", os.path.join(DATA_DIR, "docs")))
+SYSTEM_PROMPT_PATH = _resolve_backend_path(os.getenv("SYSTEM_PROMPT_PATH", os.path.join(os.path.dirname(BASE_DIR), "docs", "system_prompt.txt")))
+
+if not MODEL_NAME:
+    raise ValueError(
+        "MODEL_NAME is missing. Please set it in your .env file.\n"
+        "Format: provider/model_id (e.g. gemini/gemini-2.5-flash, openai/gpt-4o, groq/llama-3.3-70b-versatile)"
+    )

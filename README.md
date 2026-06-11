@@ -1,22 +1,12 @@
-# Aria — Internal Company AI Assistant
+# Aria - Company Policy RAG Chatbot
 
-AI-powered internal chatbot using Retrieval-Augmented Generation (RAG). 
-Employees ask questions about HR, IT, and company policies and get answers 
-grounded in real company documents — not LLM guesswork.
+Aria is a simple internal chatbot for answering employee questions from uploaded
+company policy documents. It ingests PDF files, stores searchable chunks
+in ChromaDB, retrieves relevant policy context, and asks Gemini to answer only
+from that context.
 
----
-
-## Project Direction
-
-Evolve from a document focused RAG assistant into a **hybrid AI work assistant**.  
-Alongside grounded policy Q&A, the system is being extended to support **structured data analysis, basic visualizations, and tool-driven workflows** while preserving the current reliable RAG foundation.
-
-**Near-term focus:**
-- Add lightweight analytics capability
-- Enable chart generation from business datasets
-- Keep the architecture modular and production-ready
-
----
+This project is intentionally demo-friendly: no auth, no accounts, no admin
+setup. Drop in policy PDFs, reindex, and ask questions.
 
 ## Tech Stack
 
@@ -26,104 +16,89 @@ Alongside grounded policy Q&A, the system is being extended to support **structu
 | Backend | FastAPI |
 | Vector DB | ChromaDB |
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) |
+| PDF parsing | `pypdf` |
 | Frontend | Streamlit |
-
----
-
-## Project Structure
-```
-company-chatbot/
-├── backend/
-│   ├── main.py              # FastAPI entry point, triggers indexing on startup
-│   ├── core/
-│   │   ├── config.py        # Environment variable loading
-│   │   ├── gemini.py        # Gemini client, prompt building, conversation history
-│   │   └── rag.py           # Document chunking, ChromaDB indexing and retrieval
-│   ├── routes/
-│   │   └── chat.py          # /chat endpoints, session management
-│   └── data/docs/           # Drop .txt company documents here
-├── frontend/
-│   └── app.py               # Streamlit chat UI
-├── docs/
-│   └── system_prompt.txt    # Bot persona and rules — no code needed
-└── requirements.txt
-```
-
----
 
 ## How It Works
 
-**Startup:** `.txt` files in `data/docs/` are chunked, embedded via Sentence 
-Transformers, and stored in ChromaDB. Already-indexed files are skipped.
+1. Add `.pdf` policy files through the Streamlit sidebar or place them
+   in `backend/data/docs/`.
+2. Click **Reindex policies**.
+3. The backend extracts text, chunks it, embeds it, and stores it in ChromaDB.
+4. Each chat question retrieves the most relevant chunks.
+5. Gemini answers using the retrieved policy context and returns source metadata.
 
-**Each message:**
-1. ChromaDB converts the query to an embedding, returns top 3 relevant chunks
-2. Chunks + conversation history injected into Gemini prompt
-3. Gemini returns a grounded, document-backed answer
-4. Response saved to session history, returned to Streamlit
 ```mermaid
 flowchart LR
-    A[Streamlit UI] -->|POST /chat| B[FastAPI]
-    B --> C[ChromaDB — top 3 chunks]
-    B --> D[Session History]
-    C --> E[Prompt Assembly]
-    D --> E
-    E --> F[Gemini 2.5 Flash]
-    F -->|Answer| A
+    A[Policy PDFs] --> B[Text extraction]
+    B --> C[Chunking + embeddings]
+    C --> D[ChromaDB]
+    E[Streamlit Chat] --> F[FastAPI /chat]
+    F --> D
+    D --> G[Retrieved context]
+    G --> H[Gemini]
+    H --> E
 ```
 
----
-
 ## Setup
+
 ```bash
-git clone https://github.com/HardityaGhuman/aria.git
-cd aria
 pip install -r requirements.txt
 ```
 
 Create `backend/.env`:
+
 ```ini
 GEMINI_API_KEY=your_key_here
-MODEL_NAME=gemini-2.5-flash-preview-04-17
+MODEL_NAME=gemini-2.5-flash
+EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+EMBEDDINGS_LOCAL_ONLY=true
 DOCS_PATH=./data/docs
 CHROMA_DB_PATH=./data/chroma_db
 SYSTEM_PROMPT_PATH=../docs/system_prompt.txt
 ```
+
+Run the app:
+
 ```bash
 # Terminal 1
-cd backend && python main.py
+cd backend
+python main.py
 
 # Terminal 2
-cd frontend && streamlit run app.py
+cd frontend
+streamlit run app.py
 ```
 
 - Frontend: http://localhost:8501
-- API + docs: http://localhost:8000/docs
+- API docs: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
 
----
+## Demo Flow
 
-## Screenshots
-
-### Chat Interface
-![Main Chat Interface](docs/screenshots/chat-response.jpeg)
-
-### Response with Retrieved Context
-![Chat Response](docs/screenshots/settings.jpeg)
-
----
+1. Open the Streamlit app.
+2. Upload one or more company policy PDFs in the sidebar.
+3. Click **Reindex policies**.
+4. Ask grounded questions such as:
+   - "How many days of PTO do employees get?"
+   - "What is the remote work policy?"
+   - "How do I request software access?"
+5. Turn on **Show retrieved context** to show the RAG evidence behind the answer.
+6. Ask an out-of-scope question such as "What was company revenue last year?"
+   to show that the bot refuses to invent facts not present in the policies.
 
 ## API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/chat` | Send message, get reply + context used |
-| `GET` | `/chat/history/{session_id}` | Get session history |
-| `DELETE` | `/chat/history/{session_id}` | Clear session |
-
----
+| `POST` | `/chat` | Ask a question and receive an answer with context and sources |
+| `POST` | `/chat/reindex` | Ingest new or changed PDF policy files |
+| `GET` | `/chat/documents` | List PDF policy files available for ingestion |
+| `GET` | `/chat/history/{session_id}` | Get lightweight local chat history |
+| `DELETE` | `/chat/history/{session_id}` | Clear local chat history |
 
 ## Notes
 
-- Add knowledge: drop `.txt` files into `backend/data/docs/` and restart
-- Change persona: edit `docs/system_prompt.txt`
-- Never commit `.env` or `backend/data/chroma_db/`
+- Changed policy files are automatically reindexed based on a content hash.
+- ChromaDB and uploaded policy documents are ignored by git.
+- This is a local demo app with no auth by design.

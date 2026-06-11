@@ -1,12 +1,21 @@
+import sys
+from pathlib import Path
+
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from backend.routes.chat import router as chat_router
 from backend.core.rag import initialize_vectorstore
 
 app = FastAPI(
     title="Company Chatbot API",
-    description="AI-powered chatbot backend using Gemini + RAG",
-    version="1.0.0"
+    description="AI-powered chatbot backend using LiteLLM + RAG",
+    version="1.0.0",
+    redirect_slashes=False,
 )
 
 app.add_middleware(
@@ -30,5 +39,7 @@ def health_check():
     return {"status": "ok"}
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=False)

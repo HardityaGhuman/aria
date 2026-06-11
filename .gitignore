@@ -1,7 +1,47 @@
+# Environment and secrets
 .env
-backend/data/chroma_db/
-backend/data/docs/
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 venv/
+.venv/
+env/
+
+# Streamlit and local app state
+.streamlit/secrets.toml
+
+# Generated RAG data and uploaded policy files
+data/
+backend/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.pdf
+
+# Logs and runtime output
+*.log
+logs/
+
+# OS and editor noise
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
