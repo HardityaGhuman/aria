@@ -14,7 +14,7 @@ DOCS_DIR = Path(os.getenv(
 ))
 
 st.set_page_config(
-    page_title="Aria — Company Assistant",
+    page_title="Company Policy Assistant",
     page_icon="🤖",
     layout="centered"
 )
@@ -38,8 +38,8 @@ def fetch_policy_documents():
 
 
 # ── Header ───────────────────────────────────────────────────────────
-st.title("🤖 Aria — Your Company Assistant")
-st.caption("Ask me about HR policies, IT support, onboarding, and more.")
+st.title("Company Policy Assistant")
+st.caption("Ask me about company policies, documents, and more.")
 st.divider()
 
 # ── Sidebar ──────────────────────────────────────────────────────────
