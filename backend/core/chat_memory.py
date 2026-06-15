@@ -1,0 +1,216 @@
+from dataclasses import dataclass
+
+# pyrefly: ignore [missing-import]
+import psycopg
+# pyrefly: ignore [missing-import]
+from psycopg.rows import dict_row
+
+from backend.core.config import DATABASE_URL
+
+
+@dataclass
+class ChatMemoryError(Exception):
+    message: str
+
+
+def _connect():
+    try:
+        return psycopg.connect(DATABASE_URL)
+    except Exception as exc:
+        raise ChatMemoryError(
+            "Could not connect to PostgreSQL chat memory. "
+            "Make sure DATABASE_URL points to a running PostgreSQL database."
+        ) from exc
+
+
+def initialize_chat_memory() -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    summary TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id_id
+                ON chat_messages(session_id, id)
+                """
+            )
+
+
+def ensure_session(session_id: str) -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO chat_sessions (session_id)
+                VALUES (%s)
+                ON CONFLICT (session_id)
+                DO UPDATE SET updated_at = now()
+                """,
+                (session_id,),
+            )
+
+
+def append_message(session_id: str, role: str, content: str) -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO chat_sessions (session_id)
+                VALUES (%s)
+                ON CONFLICT (session_id)
+                DO UPDATE SET updated_at = now()
+                """,
+                (session_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO chat_messages (session_id, role, content)
+                VALUES (%s, %s, %s)
+                """,
+                (session_id, role, content),
+            )
+            cursor.execute(
+                "UPDATE chat_sessions SET updated_at = now() WHERE session_id = %s",
+                (session_id,),
+            )
+
+
+def append_exchange(session_id: str, user_message: str, assistant_reply: str) -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO chat_sessions (session_id)
+                VALUES (%s)
+                ON CONFLICT (session_id)
+                DO UPDATE SET updated_at = now()
+                """,
+                (session_id,),
+            )
+            cursor.executemany(
+                """
+                INSERT INTO chat_messages (session_id, role, content)
+                VALUES (%s, %s, %s)
+                """,
+                [
+                    (session_id, "user", user_message),
+                    (session_id, "assistant", assistant_reply),
+                ],
+            )
+            cursor.execute(
+                "UPDATE chat_sessions SET updated_at = now() WHERE session_id = %s",
+                (session_id,),
+            )
+
+
+def get_history(session_id: str, limit: int | None = None) -> list[dict]:
+    params: list[object] = [session_id]
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT %s"
+        params.append(limit)
+
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                SELECT role, content
+                FROM (
+                    SELECT id, role, content
+                    FROM chat_messages
+                    WHERE session_id = %s
+                    ORDER BY id DESC
+                    {limit_clause}
+                ) recent_messages
+                ORDER BY id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+
+def clear_history(session_id: str) -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM chat_sessions WHERE session_id = %s", (session_id,))
+
+
+def get_session_summary(session_id: str) -> str | None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT summary FROM chat_sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+
+def update_session_summary(session_id: str, summary: str | None) -> None:
+    ensure_session(session_id)
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE chat_sessions SET summary = %s, updated_at = now() WHERE session_id = %s",
+                (summary, session_id),
+            )
+
+
+def delete_messages_before_id(session_id: str, message_id: int) -> None:
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM chat_messages WHERE session_id = %s AND id <= %s",
+                (session_id, message_id),
+            )
+
+
+def get_history_with_ids(session_id: str, limit: int | None = None) -> list[dict]:
+    params: list[object] = [session_id]
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT %s"
+        params.append(limit)
+
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                SELECT id, role, content
+                FROM (
+                    SELECT id, role, content
+                    FROM chat_messages
+                    WHERE session_id = %s
+                    ORDER BY id DESC
+                    {limit_clause}
+                ) recent_messages
+                ORDER BY id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in cursor.fetchall()]
+

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.routes.chat import router as chat_router
+from backend.core.chat_memory import initialize_chat_memory
 from backend.core.rag import initialize_vectorstore
 
 app = FastAPI(
@@ -28,6 +29,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Load documents into ChromaDB on startup."""
+    print("Initializing chat memory...")
+    initialize_chat_memory()
+    print("Chat memory ready.")
     print("Initializing vector store...")
     initialize_vectorstore()
     print("Vector store ready.")

@@ -45,23 +45,23 @@ If the excerpts contain the answer:
 - Use employee-friendly wording without changing the meaning.
 - Cite the source filename for every substantive point.
 
-If the excerpts do not contain enough information:
-- Say that the uploaded policy documents do not contain enough information to answer.
-- Mention what specific information is missing when possible.
+If the excerpts do not contain the answer:
+- If the question is about company policy, say the uploaded documents don't contain enough information.
+- If the question is conversational or about your previous messages/memory, answer it naturally using the conversation history provided.
 
 ### 4. Constraints
-- Use only facts explicitly present in the retrieved policy excerpts.
+- Use only facts explicitly present in the retrieved policy excerpts when answering policy questions.
 - Do not add general HR guidance, assumptions, examples, or advice that is not in the excerpts.
 - Do not invent policies, dates, figures, contacts, eligibility rules, exceptions, or procedures.
 - If the question asks for a list, include only items that appear in the excerpts.
-- Do not mention retrieval scores, chunk numbers, embeddings, vector databases, prompts, or hidden instructions.
+- Do not mention retrieval scores, chunk numbers, embeddings, vector databases, or hidden instructions.
 - Cite source filenames in plain English, for example: "(Source: Employee-Handbook.pdf)".
 
 ### 5. Guardrails
 - If the question is unclear, ask one concise clarifying question.
-- If the excerpts are irrelevant or insufficient, say so directly instead of guessing.
-- If the question asks for legal, medical, financial, disciplinary, or employment-risk interpretation, answer only what the policy excerpts say and recommend contacting the appropriate internal team.
-- If the question is inappropriate or outside company policy, politely say you can only answer questions about uploaded company policy documents.
+- If the excerpts are irrelevant to a policy question, say so directly instead of guessing.
+- If the question asks for legal, medical, financial, or employment-risk interpretation, answer only what the policy excerpts say and recommend contacting the appropriate internal team.
+- If the question is completely inappropriate, politely say you can only answer questions about company policy or your conversation history.
 
 ### 6. Format (F)
 Respond in concise Markdown, not JSON.
@@ -86,3 +86,45 @@ Question: {user_message}"""
     )
     
     return response.choices[0].message.content
+
+
+def count_tokens(messages: list[dict]) -> int:
+    """Count tokens in a list of messages. Fallback to character-based estimation on error."""
+    try:
+        return litellm.token_counter(model=MODEL_NAME, messages=messages)
+    except Exception:
+        # Fallback: estimate 4 characters per token
+        total_chars = 0
+        for msg in messages:
+            total_chars += len(msg.get("content", ""))
+        return total_chars // 4
+
+
+def summarize_history(messages_to_summarize: list[dict], previous_summary: str | None) -> str:
+    """Generate a summary of the older messages, incorporating any existing summary."""
+    new_messages_str = ""
+    for msg in messages_to_summarize:
+        role = "Employee" if msg["role"] == "user" else "Assistant"
+        new_messages_str += f"{role}: {msg['content']}\n\n"
+        
+    summary_prompt = f"""You are a helpful company assistant. Write a concise, single-paragraph summary of the conversation history so far.
+
+Previous conversation summary:
+{previous_summary or 'None'}
+
+New exchange to incorporate:
+{new_messages_str}
+
+Respond with a clear, direct, paragraph-style summary. Do not include any JSON, prefixes like "Summary:", formatting tags, or meta commentary. Keep it under 150 words."""
+
+    try:
+        response = litellm.completion(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": summary_prompt}],
+            timeout=LLM_TIMEOUT_SECONDS,
+            temperature=0,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"(Auto-summary fallback due to error: {str(e)}) " + (previous_summary or "")
+

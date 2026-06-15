@@ -15,6 +15,7 @@ setup. Drop in policy PDFs, reindex, and ask questions.
 | LLM | Gemini 2.5 Flash |
 | Backend | FastAPI |
 | Vector DB | ChromaDB |
+| Chat Memory | PostgreSQL |
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) |
 | PDF parsing | `pypdf` |
 | Frontend | Streamlit |
@@ -25,8 +26,9 @@ setup. Drop in policy PDFs, reindex, and ask questions.
    in `backend/data/docs/`.
 2. Click **Reindex policies**.
 3. The backend extracts text, chunks it, embeds it, and stores it in ChromaDB.
-4. Each chat question retrieves the most relevant chunks.
-5. Gemini answers using the retrieved policy context and returns source metadata.
+4. Conversation history is saved in PostgreSQL by Streamlit session ID.
+5. Each policy question retrieves the most relevant chunks.
+6. Gemini answers using the retrieved policy context plus recent session history.
 
 ```mermaid
 flowchart LR
@@ -35,7 +37,9 @@ flowchart LR
     C --> D[ChromaDB]
     E[Streamlit Chat] --> F[FastAPI /chat]
     F --> D
+    F --> I[PostgreSQL chat memory]
     D --> G[Retrieved context]
+    I --> H[Gemini]
     G --> H[Gemini]
     H --> E
 ```
@@ -46,11 +50,22 @@ flowchart LR
 pip install -r requirements.txt
 ```
 
+Create a local PostgreSQL database for short-term chat memory:
+
+```bash
+# If PostgreSQL is not installed on macOS:
+brew install postgresql@16
+brew services start postgresql@16
+
+createdb company_chatbot
+```
+
 Create `backend/.env`:
 
 ```ini
 GEMINI_API_KEY=your_key_here
 MODEL_NAME=gemini-2.5-flash
+DATABASE_URL=postgresql://localhost:5432/company_chatbot
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
 EMBEDDINGS_LOCAL_ONLY=true
 DOCS_PATH=./data/docs
@@ -94,8 +109,8 @@ streamlit run app.py
 | `POST` | `/chat` | Ask a question and receive an answer with context and sources |
 | `POST` | `/chat/reindex` | Ingest new or changed PDF policy files |
 | `GET` | `/chat/documents` | List PDF policy files available for ingestion |
-| `GET` | `/chat/history/{session_id}` | Get lightweight local chat history |
-| `DELETE` | `/chat/history/{session_id}` | Clear local chat history |
+| `GET` | `/chat/history/{session_id}` | Get persisted session chat history |
+| `DELETE` | `/chat/history/{session_id}` | Clear persisted session chat history |
 
 ## Notes
 
