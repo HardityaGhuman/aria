@@ -16,7 +16,7 @@ from backend.core.chat_memory import (
 )
 from backend.core.config import LLM_TIMEOUT_SECONDS, MAX_HISTORY_TOKENS
 from backend.core.llm import get_llm_response, count_tokens, summarize_history
-from backend.core.rag import initialize_vectorstore, list_policy_documents, retrieve_context
+from backend.core.rag import initialize_vectorstore, list_policy_documents, retrieve_context, RetrievedContext
 
 router = APIRouter()
 
@@ -83,8 +83,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=503, detail=e.message)
 
     # Step 1: Attempt RAG retrieval.
-    # We do NOT short-circuit if there are no sources. Memory/conversational 
-    # questions won't have sources but the LLM can still answer them using history.
+    # We retrieve unconditionally. The LLM will classify the query type.
     retrieved = retrieve_context(req.message)
     rag_context = retrieved.text if retrieved.sources else ""
 
@@ -101,9 +100,9 @@ async def chat(req: ChatRequest):
             "content": msg["content"]
         })
 
-    # Step 2: Get LLM response
+    # Step 2: Get LLM response (includes classification tag)
     try:
-        reply = await asyncio.wait_for(
+        raw_reply = await asyncio.wait_for(
             asyncio.to_thread(
                 get_llm_response,
                 user_message=req.message,
@@ -120,17 +119,55 @@ async def chat(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Step 3: Update conversation history
+    # Parse classification tag
+    lines = raw_reply.strip().split("\n")
+    first_line = lines[0].strip() if lines else ""
+    
+    classification = "policy" # default
+    if "[TYPE: meta]" in first_line:
+        classification = "meta"
+    elif "[TYPE: out_of_scope]" in first_line:
+        classification = "out_of_scope"
+    elif "[TYPE: policy]" in first_line:
+        classification = "policy"
+        
+    # Strip the classification tag from the reply
+    if first_line.startswith("[TYPE:"):
+        reply = "\n".join(lines[1:]).strip()
+    else:
+        reply = raw_reply.strip()
+
+    # Step 3: Branch on classification
+    if classification == "out_of_scope":
+        final_reply = "I'm a policy assistant and can only help with questions about company policies and operations."
+        final_context = ""
+        final_sources = []
+    elif classification == "meta":
+        final_reply = reply
+        final_context = ""
+        final_sources = []
+    else:
+        # Policy query
+        if not retrieved.sources:
+            final_reply = "I couldn't find specific information on that in the handbook. Please check with HR or the Executive Director."
+            final_context = ""
+            final_sources = []
+        else:
+            final_reply = reply
+            final_context = retrieved.text
+            final_sources = retrieved.sources
+
+    # Step 4: Update conversation history
     try:
-        append_exchange(req.session_id, req.message, reply)
+        append_exchange(req.session_id, req.message, final_reply)
     except ChatMemoryError as e:
         raise HTTPException(status_code=503, detail=e.message)
 
     return ChatResponse(
         session_id=req.session_id,
-        reply=reply,
-        context_used=retrieved.text,
-        sources=retrieved.sources,
+        reply=final_reply,
+        context_used=final_context,
+        sources=final_sources,
     )
 
 
