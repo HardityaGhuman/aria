@@ -5,24 +5,30 @@ from dataclasses import dataclass
 
 import chromadb
 from chromadb.utils import embedding_functions
+from rank_bm25 import BM25Okapi
 from backend.core.config import (
     CHROMA_DB_PATH,
     DOCS_PATH,
     EMBEDDING_MODEL_NAME,
     EMBEDDINGS_LOCAL_ONLY,
     RETRIEVAL_TOP_K,
+    RRF_K_CONSTANT,
+    BM25_CANDIDATE_POOL,
     EXPAND_SECTION_RETRIEVAL,
 )
 
 _embedding_fn = None
 _client = None
 _collection = None
+_bm25_corpus = None
+_bm25_index = None
+_bm25_metadata = None
 
 SUPPORTED_EXTENSIONS = {".pdf"}
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 CHUNK_VERSION = "2026-05-08-pdf-rag-v3"
-MAX_DISTANCE = 0.62
+MAX_DISTANCE = 0.8
 
 
 @dataclass
@@ -50,6 +56,39 @@ def get_collection():
             embedding_function=get_embedding_function()
         )
     return _collection
+
+
+BM25_STOPWORDS = {
+    "can", "i", "be", "for", "the", "a", "an", "is", "are", "was", "were",
+    "to", "of", "in", "on", "at", "by", "or", "and", "my", "do", "did",
+    "what", "how", "will", "it", "that", "this", "if", "not", "any", "me",
+    "we", "you", "he", "she", "they", "them", "their", "its", "our", "has",
+    "have", "had", "been", "with", "from", "about", "which", "when", "who"
+}
+
+def tokenize_for_bm25(text: str) -> list[str]:
+    tokens = re.findall(r'\w+', text.lower())
+    return [t for t in tokens if t not in BM25_STOPWORDS]
+
+def get_bm25_index():
+    global _bm25_corpus, _bm25_index, _bm25_metadata
+    if _bm25_index is None:
+        collection = get_collection()
+        docs = collection.get(where={"content_type": {"$ne": "toc"}}, include=["documents", "metadatas"])
+        _bm25_metadata = docs.get("metadatas", [])
+        _bm25_corpus = docs.get("documents", [])
+        
+        tokenized_corpus = [tokenize_for_bm25(doc) for doc in _bm25_corpus] if _bm25_corpus else []
+        _bm25_index = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+        
+    return _bm25_index, _bm25_corpus, _bm25_metadata
+
+
+def invalidate_bm25():
+    global _bm25_corpus, _bm25_index, _bm25_metadata
+    _bm25_corpus = None
+    _bm25_index = None
+    _bm25_metadata = None
 
 
 def _file_hash(filepath: str) -> str:
@@ -273,12 +312,15 @@ def initialize_vectorstore() -> dict:
         stats["indexed"] += len(documents)
         print(f"  Indexed {filename} ({len(documents)} chunks)")
 
+    if stats["indexed"] > 0 or stats["deleted"] > 0:
+        invalidate_bm25()
+
     return stats
 
 
 def retrieve_context(query: str, n_results: int = None) -> RetrievedContext:
     """
-    Query ChromaDB and return relevant policy chunks with source metadata.
+    Query ChromaDB using hybrid BM25 + Vector search with Reciprocal Rank Fusion (RRF).
     """
     if n_results is None:
         n_results = RETRIEVAL_TOP_K
@@ -290,38 +332,68 @@ def retrieve_context(query: str, n_results: int = None) -> RetrievedContext:
             sources=[],
         )
 
-    results = collection.query(
+    # 1. Vector Search
+    vec_results = collection.query(
         query_texts=[query],
-        n_results=n_results,
+        n_results=BM25_CANDIDATE_POOL,
         where={"content_type": {"$ne": "toc"}},
         include=["documents", "metadatas", "distances"],
     )
 
-    if not results["documents"] or not results["documents"][0]:
+    vec_chunks = vec_results["documents"][0] if vec_results.get("documents") and vec_results["documents"] else []
+    vec_metadatas = vec_results["metadatas"][0] if vec_results.get("metadatas") and vec_results["metadatas"] else []
+    vec_distances = vec_results.get("distances", [[]])[0] if vec_results.get("distances") and vec_results["distances"] else []
+
+    vec_valid = []
+    chunk_dict = {}
+    for chunk, meta, dist in zip(vec_chunks, vec_metadatas, vec_distances):
+        if dist is not None and dist <= MAX_DISTANCE:
+            chunk_id = f"{meta.get('source')}:{meta.get('chunk')}"
+            vec_valid.append(chunk_id)
+            chunk_dict[chunk_id] = {"chunk": chunk, "metadata": meta, "distance": dist}
+
+    # 2. BM25 Search
+    bm25_index, bm25_corpus, bm25_metadata = get_bm25_index()
+    bm25_valid = []
+    if bm25_index is not None:
+        tokenized_query = tokenize_for_bm25(query)
+        bm25_scores = bm25_index.get_scores(tokenized_query)
+        scored_indices = sorted(enumerate(bm25_scores), key=lambda x: x[1], reverse=True)[:BM25_CANDIDATE_POOL]
+        
+        for idx, score in scored_indices:
+            if score > 0:
+                meta = bm25_metadata[idx]
+                chunk = bm25_corpus[idx]
+                chunk_id = f"{meta.get('source')}:{meta.get('chunk')}"
+                bm25_valid.append(chunk_id)
+                if chunk_id not in chunk_dict:
+                    chunk_dict[chunk_id] = {"chunk": chunk, "metadata": meta, "distance": None}
+
+    # 3. RRF Merging
+    all_candidates = set(vec_valid) | set(bm25_valid)
+    if not all_candidates:
         return RetrievedContext(text="No relevant context found.", sources=[])
 
-    chunks = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    distances = results.get("distances", [[]])[0]
+    rrf_scores = {}
+    fallback_rank = BM25_CANDIDATE_POOL + 1
+    for chunk_id in all_candidates:
+        vec_rank = vec_valid.index(chunk_id) + 1 if chunk_id in vec_valid else fallback_rank
+        bm25_rank = bm25_valid.index(chunk_id) + 1 if chunk_id in bm25_valid else fallback_rank
+        
+        score = (1 / (RRF_K_CONSTANT + vec_rank)) + (1 / (RRF_K_CONSTANT + bm25_rank))
+        rrf_scores[chunk_id] = score
 
-    valid_indices = [i for i, d in enumerate(distances) if d is not None and d <= MAX_DISTANCE]
-    if not valid_indices:
-        return RetrievedContext(text="No relevant context found.", sources=[])
+    # Sort descending by RRF score and pick top K
+    sorted_chunks = sorted(rrf_scores.keys(), key=lambda cid: rrf_scores[cid], reverse=True)[:n_results]
 
     # Build initial context map
     context_map = {}
-    for i in valid_indices:
-        metadata = metadatas[i]
-        chunk_id = f"{metadata.get('source')}:{metadata.get('chunk')}"
-        context_map[chunk_id] = {
-            "chunk": chunks[i],
-            "metadata": metadata,
-            "distance": distances[i]
-        }
+    for chunk_id in sorted_chunks:
+        context_map[chunk_id] = chunk_dict[chunk_id]
 
     # Parent section expansion
     if EXPAND_SECTION_RETRIEVAL:
-        parent_sections = set(metadatas[i].get("parent_section") for i in valid_indices if metadatas[i].get("parent_section"))
+        parent_sections = set(context_map[cid]["metadata"].get("parent_section") for cid in context_map if context_map[cid]["metadata"].get("parent_section"))
         if parent_sections:
             expanded_results = collection.get(
                 where={

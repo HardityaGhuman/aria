@@ -11,7 +11,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_ch
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "true"
-RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "3"))
+RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+RRF_K_CONSTANT = int(os.getenv("RRF_K_CONSTANT", "60"))
+BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "20"))
 EXPAND_SECTION_RETRIEVAL = os.getenv("EXPAND_SECTION_RETRIEVAL", "true").lower() == "true"
 # Base directory is "backend/"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

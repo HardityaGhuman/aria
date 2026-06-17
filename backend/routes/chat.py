@@ -37,6 +37,21 @@ class ChatResponse(BaseModel):
 def _normalized_message(message: str) -> str:
     return message.strip().lower().strip(".!?")
 
+def _is_insufficient_policy_answer(reply: str) -> bool:
+    normalized = reply.lower()
+    insufficient_markers = [
+        "do not contain enough information",
+        "don't contain enough information",
+        "does not contain enough information",
+        "uploaded documents don't contain",
+        "uploaded policy documents do not contain",
+        "provided documents do not contain",
+        "not found in the provided documents",
+        "couldn't find specific information",
+        "could not find specific information",
+    ]
+    return any(marker in normalized for marker in insufficient_markers)
+
 
 # --- Endpoints ---
 
@@ -153,9 +168,14 @@ async def chat(req: ChatRequest):
             final_context = ""
             final_sources = []
         else:
-            final_reply = reply
-            final_context = retrieved.text
-            final_sources = retrieved.sources
+            if _is_insufficient_policy_answer(reply):
+                final_reply = reply
+                final_context = ""
+                final_sources = []
+            else:
+                final_reply = reply
+                final_context = retrieved.text
+                final_sources = retrieved.sources
 
     # Step 4: Update conversation history
     try:

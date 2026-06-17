@@ -85,6 +85,15 @@ Classify as [TYPE: meta] if the query is about this conversation itself — incl
 
 Classify as [TYPE: out_of_scope] if the query has nothing to do with company policy and is not about this conversation — for example requests to write code, general knowledge questions, or tasks unrelated to the policy assistant's purpose.
 
+Classify as [TYPE: out_of_scope] if the user is asking the assistant to create a new artifact, report, essay, script, email, presentation, document, policy draft, or long-form generated content, even if the topic is related to company policy. The assistant may answer questions about policies, summarize what the handbook says, or explain policy details, but it should not generate standalone reports or documents.
+
+Examples:
+- "what benefits do employees get" -> [TYPE: policy]
+- "summarize the benefits policy" -> [TYPE: policy]
+- "write me a report on employee benefits" -> [TYPE: out_of_scope]
+- "write an email explaining the leave policy" -> [TYPE: out_of_scope]
+- "make me a presentation about PTO" -> [TYPE: out_of_scope]
+
 Question: {user_message}"""
 
     messages = [{"role": "system", "content": system_prompt}]
