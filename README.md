@@ -64,10 +64,14 @@ Create `backend/.env`:
 
 ```ini
 GEMINI_API_KEY=your_key_here
-MODEL_NAME=gemini-2.5-flash
+MODEL_NAME=gemini/gemini-2.5-flash
+ROUTER_MODEL_NAME=gemini/gemini-2.5-flash-lite
 DATABASE_URL=postgresql://localhost:5432/company_chatbot
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
 EMBEDDINGS_LOCAL_ONLY=true
+RETRIEVAL_TOP_K=3
+BM25_CANDIDATE_POOL=10
+EXPAND_SECTION_RETRIEVAL=false
 DOCS_PATH=./data/docs
 CHROMA_DB_PATH=./data/chroma_db
 SYSTEM_PROMPT_PATH=../docs/system_prompt.txt

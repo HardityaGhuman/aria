@@ -39,5 +39,3 @@ echo "Press Ctrl+C to stop both services."
   cd "$ROOT_DIR/frontend"
   "$STREAMLIT" run app.py --server.port "$FRONTEND_PORT" --server.address 127.0.0.1
 )
-
-# type ./start.sh to start

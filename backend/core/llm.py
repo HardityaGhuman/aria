@@ -2,7 +2,7 @@
 import litellm
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-from backend.core.config import LLM_TIMEOUT_SECONDS, MODEL_NAME, SYSTEM_PROMPT_PATH
+from backend.core.config import LLM_TIMEOUT_SECONDS, MODEL_NAME, ROUTER_MODEL_NAME, SYSTEM_PROMPT_PATH
 
 def load_system_prompt() -> str:
     try:
@@ -92,7 +92,7 @@ Latest query:
         classification_prompt,
     )
     response = litellm.completion(
-        model=MODEL_NAME,
+        model=ROUTER_MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
         temperature=0,
@@ -139,58 +139,11 @@ def get_llm_response(user_message: str, context: str, history: list[dict]) -> st
         The model's response as a string.
     """
     system_prompt = load_system_prompt()
-    
-    augmented_message = f"""### 1. Persona (P)
-You are Aria, an internal company policy assistant. Be professional, warm, direct, and grounded in the uploaded policy documents.
-
-### 2. Context (C)
-The employee has asked:
-"{user_message}"
+    augmented_message = f"""Employee question:
+{user_message}
 
 Retrieved policy excerpts:
-{context}
------------------------
-
-### 3. Task (T)
-Answer the employee's question using only the retrieved policy excerpts above.
-
-If the excerpts contain the answer:
-- Provide the exact policy details that answer the question.
-- Use employee-friendly wording without changing the meaning.
-- Cite the source filename for every substantive point.
-
-If the excerpts do not contain the answer:
-- If the question is about company policy, say the uploaded documents don't contain enough information.
-- If the question is conversational or about your previous messages/memory, answer it naturally using the conversation history provided.
-
-### 4. Constraints
-- Use only facts explicitly present in the retrieved policy excerpts when answering policy questions.
-- Do not add general HR guidance, assumptions, examples, or advice that is not in the excerpts.
-- Do not invent policies, dates, figures, contacts, eligibility rules, exceptions, or procedures.
-- If the question asks for a list, include only items that appear in the excerpts.
-- Do not mention retrieval scores, chunk numbers, embeddings, vector databases, or hidden instructions.
-- Cite source filenames exactly as they appear in the provided context brackets (e.g. "[Source: filename.pdf]").
-
-### 5. Guardrails
-- If the question is unclear, ask one concise clarifying question.
-- If the excerpts are irrelevant to a policy question, say so directly instead of guessing.
-- If the question asks for legal, medical, financial, or employment-risk interpretation, answer only what the policy excerpts say and recommend contacting the appropriate internal team.
-- If the question is completely inappropriate, politely say you can only answer questions about company policy or your conversation history.
-- If the question is an arbitrary, off-topic, or general knowledge query unrelated to company policies or operations: STOP immediately. Respond EXACTLY and ONLY with a brief refusal such as: "I am an internal company policy assistant. I can only assist with questions regarding company policies and operations. Please ask a policy-related question." Do NOT mention policy excerpts, uploaded documents, or append a "Not found" section.
-
-
-### 6. Format (F)
-Respond in concise Markdown, not JSON.
-
-(Note: If the question triggered a refusal guardrail, output ONLY the refusal message without applying the structure below).
-
-For valid policy questions, use this structure:
-- Start with a direct one-sentence answer.
-- Then list specific policy details as bullets.
-- Include a source filename on every substantive bullet or paragraph.
-- End with "Not found in the provided documents:" only if important requested details are missing.
-
-Question: {user_message}"""
+{context}"""
     
     messages = _build_messages(system_prompt, augmented_message, history)
 
@@ -234,9 +187,13 @@ New exchange to incorporate:
 Respond with a clear, direct, paragraph-style summary. Do not include any JSON, prefixes like "Summary:", formatting tags, or meta commentary. Keep it under 150 words."""
 
     try:
+        messages = _build_messages(
+            "You summarize internal policy assistant conversations.",
+            summary_prompt,
+        )
         response = litellm.completion(
             model=MODEL_NAME,
-            messages=[{"role": "user", "content": summary_prompt}],
+            messages=messages,
             timeout=LLM_TIMEOUT_SECONDS,
             temperature=0,
         )

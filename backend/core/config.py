@@ -6,15 +6,16 @@ env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini/gemini-3.5-flash")
+ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", MODEL_NAME)
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_chatbot")
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "true"
-RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "3"))
 RRF_K_CONSTANT = int(os.getenv("RRF_K_CONSTANT", "60"))
-BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "20"))
-EXPAND_SECTION_RETRIEVAL = os.getenv("EXPAND_SECTION_RETRIEVAL", "true").lower() == "true"
+BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "10"))
+EXPAND_SECTION_RETRIEVAL = os.getenv("EXPAND_SECTION_RETRIEVAL", "false").lower() == "true"
 # Base directory is "backend/"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -33,4 +34,10 @@ if not MODEL_NAME:
     raise ValueError(
         "MODEL_NAME is missing. Please set it in your .env file.\n"
         "Format: provider/model_id (e.g. gemini/gemini-2.5-flash, openai/gpt-4o, groq/llama-3.3-70b-versatile)"
+    )
+
+if not ROUTER_MODEL_NAME:
+    raise ValueError(
+        "ROUTER_MODEL_NAME is missing. Set it to a small model for classification, "
+        "or omit it to reuse MODEL_NAME."
     )

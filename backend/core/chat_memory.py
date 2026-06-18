@@ -23,6 +23,18 @@ def _connect():
         ) from exc
 
 
+def _ensure_session(cursor, session_id: str) -> None:
+    cursor.execute(
+        """
+        INSERT INTO chat_sessions (session_id)
+        VALUES (%s)
+        ON CONFLICT (session_id)
+        DO UPDATE SET updated_at = now()
+        """,
+        (session_id,),
+    )
+
+
 def initialize_chat_memory() -> None:
     with _connect() as connection:
         with connection.cursor() as cursor:
@@ -60,57 +72,10 @@ def initialize_chat_memory() -> None:
             )
 
 
-def ensure_session(session_id: str) -> None:
-    with _connect() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO chat_sessions (session_id)
-                VALUES (%s)
-                ON CONFLICT (session_id)
-                DO UPDATE SET updated_at = now()
-                """,
-                (session_id,),
-            )
-
-
-def append_message(session_id: str, role: str, content: str) -> None:
-    with _connect() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO chat_sessions (session_id)
-                VALUES (%s)
-                ON CONFLICT (session_id)
-                DO UPDATE SET updated_at = now()
-                """,
-                (session_id,),
-            )
-            cursor.execute(
-                """
-                INSERT INTO chat_messages (session_id, role, content)
-                VALUES (%s, %s, %s)
-                """,
-                (session_id, role, content),
-            )
-            cursor.execute(
-                "UPDATE chat_sessions SET updated_at = now() WHERE session_id = %s",
-                (session_id,),
-            )
-
-
 def append_exchange(session_id: str, user_message: str, assistant_reply: str) -> None:
     with _connect() as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO chat_sessions (session_id)
-                VALUES (%s)
-                ON CONFLICT (session_id)
-                DO UPDATE SET updated_at = now()
-                """,
-                (session_id,),
-            )
+            _ensure_session(cursor, session_id)
             cursor.executemany(
                 """
                 INSERT INTO chat_messages (session_id, role, content)
@@ -127,18 +92,20 @@ def append_exchange(session_id: str, user_message: str, assistant_reply: str) ->
             )
 
 
-def get_history(session_id: str, limit: int | None = None) -> list[dict]:
+def _get_history(session_id: str, limit: int | None = None, include_ids: bool = False) -> list[dict]:
     params: list[object] = [session_id]
     limit_clause = ""
     if limit is not None:
         limit_clause = "LIMIT %s"
         params.append(limit)
 
+    selected_columns = "id, role, content" if include_ids else "role, content"
+
     with _connect() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 f"""
-                SELECT role, content
+                SELECT {selected_columns}
                 FROM (
                     SELECT id, role, content
                     FROM chat_messages
@@ -151,6 +118,10 @@ def get_history(session_id: str, limit: int | None = None) -> list[dict]:
                 params,
             )
             return [dict(row) for row in cursor.fetchall()]
+
+
+def get_history(session_id: str, limit: int | None = None) -> list[dict]:
+    return _get_history(session_id, limit)
 
 
 def clear_history(session_id: str) -> None:
@@ -171,9 +142,9 @@ def get_session_summary(session_id: str) -> str | None:
 
 
 def update_session_summary(session_id: str, summary: str | None) -> None:
-    ensure_session(session_id)
     with _connect() as connection:
         with connection.cursor() as cursor:
+            _ensure_session(cursor, session_id)
             cursor.execute(
                 "UPDATE chat_sessions SET summary = %s, updated_at = now() WHERE session_id = %s",
                 (summary, session_id),
@@ -190,27 +161,4 @@ def delete_messages_before_id(session_id: str, message_id: int) -> None:
 
 
 def get_history_with_ids(session_id: str, limit: int | None = None) -> list[dict]:
-    params: list[object] = [session_id]
-    limit_clause = ""
-    if limit is not None:
-        limit_clause = "LIMIT %s"
-        params.append(limit)
-
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                f"""
-                SELECT id, role, content
-                FROM (
-                    SELECT id, role, content
-                    FROM chat_messages
-                    WHERE session_id = %s
-                    ORDER BY id DESC
-                    {limit_clause}
-                ) recent_messages
-                ORDER BY id ASC
-                """,
-                params,
-            )
-            return [dict(row) for row in cursor.fetchall()]
-
+    return _get_history(session_id, limit, include_ids=True)

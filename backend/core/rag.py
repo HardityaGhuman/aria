@@ -27,17 +27,13 @@ _bm25_index = None
 _bm25_metadata = None
 
 SUPPORTED_EXTENSIONS = {".pdf"}
-CHUNK_SIZE = 1200
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 2000
+CHUNK_OVERLAP = 100
 CHUNK_VERSION = "2026-05-08-pdf-rag-v3"
 MAX_DISTANCE = 0.8
-# This splits the text into chunks of size 4000 and overlap of 200
-# Provided as a LangChain component so that we don't have to manually split the text
-# This is a common technique in RAG to ensure that related information is kept together 
-# in the same chunk
 SECTION_SPLITTER = RecursiveCharacterTextSplitter(
-    chunk_size=4000,
-    chunk_overlap=200,
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP,
     add_start_index=True,
 )
 
@@ -223,9 +219,8 @@ def _chunk_text(pages: list[Document]) -> list[Document]:
 
 
 def _add_section_chunks(section: str, chunks: list[Document], content_type: str, parent_section: str = ""):
-    max_chunk_size = 4000
     metadata = {"content_type": content_type, "parent_section": parent_section}
-    if len(section) <= max_chunk_size:
+    if len(section) <= CHUNK_SIZE:
         chunks.append(Document(page_content=section, metadata=metadata))
         return
 

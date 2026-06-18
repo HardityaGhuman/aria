@@ -22,7 +22,7 @@ from backend.core.llm import (
     count_tokens,
     summarize_history,
 )
-from backend.core.rag import initialize_vectorstore, list_policy_documents, retrieve_context, RetrievedContext
+from backend.core.rag import initialize_vectorstore, list_policy_documents, retrieve_context
 
 router = APIRouter()
 
@@ -39,9 +39,6 @@ class ChatResponse(BaseModel):
     context_used: str
     sources: list[dict] = Field(default_factory=list)
 
-
-def _normalized_message(message: str) -> str:
-    return message.strip().lower().strip(".!?")
 
 def _is_insufficient_policy_answer(reply: str) -> bool:
     normalized = reply.lower()
