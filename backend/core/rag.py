@@ -3,8 +3,11 @@ import os
 import re
 from dataclasses import dataclass
 
-import chromadb
-from chromadb.utils import embedding_functions
+# pyrefly: ignore [missing-import]
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
 from backend.core.config import (
     CHROMA_DB_PATH,
@@ -15,11 +18,10 @@ from backend.core.config import (
     RRF_K_CONSTANT,
     BM25_CANDIDATE_POOL,
     EXPAND_SECTION_RETRIEVAL,
-)
+)   
 
 _embedding_fn = None
-_client = None
-_collection = None
+_vector_store = None
 _bm25_corpus = None
 _bm25_index = None
 _bm25_metadata = None
@@ -29,6 +31,15 @@ CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 CHUNK_VERSION = "2026-05-08-pdf-rag-v3"
 MAX_DISTANCE = 0.8
+# This splits the text into chunks of size 4000 and overlap of 200
+# Provided as a LangChain component so that we don't have to manually split the text
+# This is a common technique in RAG to ensure that related information is kept together 
+# in the same chunk
+SECTION_SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=4000,
+    chunk_overlap=200,
+    add_start_index=True,
+)
 
 
 @dataclass
@@ -40,22 +51,33 @@ def get_embedding_function():
     global _embedding_fn
     if _embedding_fn is None:
         print("Loading embedding model (this may take a moment)...")
-        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        _embedding_fn = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
-            local_files_only=EMBEDDINGS_LOCAL_ONLY,
+            model_kwargs={"local_files_only": EMBEDDINGS_LOCAL_ONLY},
         )
         print("Embedding model loaded.")
     return _embedding_fn
 
-def get_collection():
-    global _client, _collection
-    if _collection is None:
-        _client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        _collection = _client.get_or_create_collection(
-            name="company_docs",
-            embedding_function=get_embedding_function()
+
+def get_vector_store():
+    # This sets up the vector store Chroma component 
+    # Chroma is a vector database that stores and retrieves text chunks based on their semantic similarity.
+    # In simpler terms, it's like a smart library that understands the meaning of text, not just keywords.
+    # It uses embeddings to represent text as vectors (numbers) and then finds the most similar vectors to a query.
+    # This allows for more flexible and accurate retrieval of relevant information.
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = Chroma(
+            collection_name="company_docs",
+            embedding_function=get_embedding_function(),
+            persist_directory=CHROMA_DB_PATH,
         )
-    return _collection
+    return _vector_store
+
+
+def get_collection():
+    """Return the underlying Chroma collection for existing hybrid retrieval code."""
+    return get_vector_store()._collection
 
 
 BM25_STOPWORDS = {
@@ -106,38 +128,51 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
-def _load_pdf_file(filepath: str) -> list[dict]:
+def _load_pdf_file(filepath: str) -> list[Document]:
     from pypdf import PdfReader
-
+    # Uses pypdf library to extract text from pdf
     reader = PdfReader(filepath)
     pages = []
+    filename = os.path.basename(filepath)
     for page_number, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text() or ""
         if page_text.strip():
-            pages.append({"page": page_number, "text": f"Page {page_number}\n{page_text}"})
+            # Document object created with page content and metadata
+            pages.append(
+                Document(
+                    page_content=f"Page {page_number}\n{page_text}",
+                    metadata={"page": page_number, "source": filename},
+                )
+            )
     return pages
 
 
-def _load_document(filepath: str) -> list[dict]:
+def _load_document(filepath: str) -> list[Document]:
     extension = os.path.splitext(filepath)[1].lower()
     if extension == ".pdf":
         return _load_pdf_file(filepath)
     return []
 
 
-def _chunk_text(pages: list[dict]) -> list[dict]:
+def _chunk_text(pages: list[Document]) -> list[Document]:
     if not pages:
         return []
 
-    toc_pages = [p["text"] for p in pages if p["page"] in (3, 4)]
-    content_pages = [p["text"] for p in pages if p["page"] not in (3, 4)]
+    toc_pages = [p.page_content for p in pages if p.metadata.get("page") in (3, 4)]
+    content_pages = [p.page_content for p in pages if p.metadata.get("page") not in (3, 4)]
 
     chunks = []
 
     if toc_pages:
         toc_full = _clean_text("\n\n".join(toc_pages))
-        chunks.append({"text": toc_full, "content_type": "toc", "parent_section": ""})
+        chunks.append(
+            Document(
+                page_content=toc_full,
+                metadata={"content_type": "toc", "parent_section": ""},
+            )
+        )
 
+    # Following section implements Structure-Aware chunking:
     if content_pages:
         content_full = _clean_text("\n\n".join(content_pages))
         boundary_pattern = re.compile(r'\n\s*(?=(?:[IVX]+\.|[IVX]+\.[A-Z]\.|[A-Z]\.)\s+[A-Z])')
@@ -187,33 +222,17 @@ def _chunk_text(pages: list[dict]) -> list[dict]:
     return chunks
 
 
-def _add_section_chunks(section: str, chunks: list[dict], content_type: str, parent_section: str = ""):
+def _add_section_chunks(section: str, chunks: list[Document], content_type: str, parent_section: str = ""):
     max_chunk_size = 4000
+    metadata = {"content_type": content_type, "parent_section": parent_section}
     if len(section) <= max_chunk_size:
-        chunks.append({"text": section, "content_type": content_type, "parent_section": parent_section})
+        chunks.append(Document(page_content=section, metadata=metadata))
         return
-        
-    start = 0
-    while start < len(section):
-        end = min(start + max_chunk_size, len(section))
-        if end < len(section):
-            paragraph_break = section.rfind("\n\n", start, end)
-            sentence_break = section.rfind(". ", start, end)
-            split_at = max(paragraph_break, sentence_break)
-            if split_at > start + max_chunk_size // 2:
-                end = split_at + 1
-        
-        chunk = section[start:end].strip()
-        if chunk:
-            chunks.append({"text": chunk, "content_type": content_type, "parent_section": parent_section})
-            
-        if end == len(section):
-            start = end
-        else:
-            start = max(end - 200, start + 1)
-            next_break = section.find("\n", start, min(start + 120, len(section)))
-            if next_break != -1:
-                start = next_break + 1
+
+    split_docs = SECTION_SPLITTER.split_documents(
+        [Document(page_content=section, metadata=metadata)]
+    )
+    chunks.extend(doc for doc in split_docs if doc.page_content.strip())
 
 
 def list_policy_documents() -> list[dict]:
@@ -285,16 +304,16 @@ def initialize_vectorstore() -> dict:
             stats["deleted"] += len(existing_chunks["ids"])
 
         pages = _load_document(filepath)
-        chunk_dicts = _chunk_text(pages)
-        if not chunk_dicts:
+        chunk_docs = _chunk_text(pages)
+        if not chunk_docs:
             print(f"  Skipping {filename} (no extractable text)")
             stats["skipped"] += 1
             continue
 
         safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename)
-        chunk_ids = [f"{safe_name}:{source_hash[:12]}:{i}" for i in range(len(chunk_dicts))]
+        chunk_ids = [f"{safe_name}:{source_hash[:12]}:{i}" for i in range(len(chunk_docs))]
         
-        documents = [cd["text"] for cd in chunk_dicts]
+        documents = [doc.page_content for doc in chunk_docs]
         metadatas = [
             {
                 "source": filename,
@@ -302,13 +321,18 @@ def initialize_vectorstore() -> dict:
                 "chunk": i + 1,
                 "chunk_version": CHUNK_VERSION,
                 "type": extension.lstrip("."),
-                "content_type": cd["content_type"],
-                "parent_section": cd.get("parent_section", ""),
+                "content_type": doc.metadata.get("content_type", ""),
+                "parent_section": doc.metadata.get("parent_section", ""),
+                **(
+                    {"start_index": doc.metadata["start_index"]}
+                    if "start_index" in doc.metadata
+                    else {}
+                ),
             }
-            for i, cd in enumerate(chunk_dicts)
+            for i, doc in enumerate(chunk_docs)
         ]
 
-        collection.add(documents=documents, ids=chunk_ids, metadatas=metadatas)
+        get_vector_store().add_texts(texts=documents, ids=chunk_ids, metadatas=metadatas)
         stats["indexed"] += len(documents)
         print(f"  Indexed {filename} ({len(documents)} chunks)")
 

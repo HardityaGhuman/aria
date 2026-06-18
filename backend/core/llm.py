@@ -1,5 +1,7 @@
 # pyrefly: ignore [missing-import]
 import litellm
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
 from backend.core.config import LLM_TIMEOUT_SECONDS, MODEL_NAME, SYSTEM_PROMPT_PATH
 
 def load_system_prompt() -> str:
@@ -11,6 +13,118 @@ def load_system_prompt() -> str:
             "You are a helpful company policy assistant. Answer only from the "
             "provided context and say when the answer is not in the documents."
         )
+
+
+def _to_litellm_messages(messages: list[BaseMessage]) -> list[dict]:
+    role_by_type = {
+        "system": "system",
+        "human": "user",
+        "ai": "assistant",
+    }
+    return [
+        {"role": role_by_type.get(message.type, message.type), "content": message.content}
+        for message in messages
+    ]
+
+
+def _history_to_messages(history: list[dict]) -> list[BaseMessage]:
+    converted = []
+    for message in history:
+        role = message.get("role")
+        content = message.get("content", "")
+        if role == "system":
+            converted.append(SystemMessage(content=content))
+        elif role == "assistant":
+            converted.append(AIMessage(content=content))
+        else:
+            converted.append(HumanMessage(content=content))
+    return converted
+
+
+def _build_messages(system_prompt: str, user_prompt: str, history: list[dict] | None = None) -> list[dict]:
+    template = ChatPromptTemplate.from_messages(
+        [
+            ("system", "{system_prompt}"),
+            ("human", "{user_prompt}"),
+        ]
+    )
+    formatted = template.format_messages(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    if history:
+        formatted = [formatted[0], *_history_to_messages(history), formatted[1]]
+    return _to_litellm_messages(formatted)
+
+
+def classify_query(user_message: str, history: list[dict]) -> str:
+    """Classify routing before retrieval so non-policy queries skip RAG."""
+    history_excerpt = "\n".join(
+        f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+        for msg in history[-6:]
+        if msg.get("content")
+    ) or "No prior conversation."
+    classification_prompt = f"""Classify the user's latest query for a company policy assistant.
+
+Return exactly one label and nothing else: policy, meta, or out_of_scope.
+
+Definitions:
+- policy: The user asks about a company rule, benefit, procedure, entitlement, handbook topic, or operational policy.
+- meta: The user asks about this conversation, previous messages, what has been discussed, how many questions were asked, or asks for a recap of the chat.
+- out_of_scope: The user asks for general knowledge, code, unrelated tasks, or asks the assistant to create a new artifact/report/email/document/presentation/script/essay/policy draft. Content-generation requests are out_of_scope even when the topic mentions company policy.
+
+Examples:
+- "what benefits do employees get" -> policy
+- "summarize the benefits policy" -> policy
+- "summarize what we discussed so far" -> meta
+- "how many questions have I asked" -> meta
+- "write me a report on employee benefits" -> out_of_scope
+- "write an email explaining the leave policy" -> out_of_scope
+- "what is the capital of France" -> out_of_scope
+
+Recent conversation:
+{history_excerpt}
+
+Latest query:
+{user_message}"""
+    messages = _build_messages(
+        "You are a precise routing classifier for a company policy assistant.",
+        classification_prompt,
+    )
+    response = litellm.completion(
+        model=MODEL_NAME,
+        messages=messages,
+        timeout=LLM_TIMEOUT_SECONDS,
+        temperature=0,
+    )
+    label = response.choices[0].message.content.strip().lower()
+    if "meta" in label:
+        return "meta"
+    if "out_of_scope" in label or "out of scope" in label:
+        return "out_of_scope"
+    return "policy"
+
+
+def get_meta_response(user_message: str, history: list[dict]) -> str:
+    """Answer conversation-history questions without retrieved policy context."""
+    prompt = f"""The user is asking about this conversation, not about company policy documents.
+
+Answer using only the conversation history provided in the messages. Do not cite policy documents, do not mention retrieved context, and do not add a "Not found in the provided documents" section.
+
+User question:
+{user_message}"""
+    messages = _build_messages(
+        "You answer questions about the current chat history only.",
+        prompt,
+        history,
+    )
+    response = litellm.completion(
+        model=MODEL_NAME,
+        messages=messages,
+        timeout=LLM_TIMEOUT_SECONDS,
+        temperature=0,
+    )
+    return response.choices[0].message.content.strip()
 
 def get_llm_response(user_message: str, context: str, history: list[dict]) -> str:
     """
@@ -76,29 +190,9 @@ For valid policy questions, use this structure:
 - Include a source filename on every substantive bullet or paragraph.
 - End with "Not found in the provided documents:" only if important requested details are missing.
 
-### 7. Classification
-Before responding to any user query, classify it as exactly one of three types and output the classification as the very first line of your response in this format: [TYPE: policy], [TYPE: meta], or [TYPE: out_of_scope]. After that first line, produce your response as normal. Do not explain the classification. Do not skip the classification line.
-
-Classify as [TYPE: policy] if the query is asking about any company rule, benefit, procedure, entitlement, or policy — even if phrased casually or indirectly.
-
-Classify as [TYPE: meta] if the query is about this conversation itself — including questions about what has been discussed, how many questions have been asked, what the user's previous questions were, what the assistant previously said, or any summary or recap of the conversation. If a query is ambiguous between meta and policy, classify as policy.
-
-Classify as [TYPE: out_of_scope] if the query has nothing to do with company policy and is not about this conversation — for example requests to write code, general knowledge questions, or tasks unrelated to the policy assistant's purpose.
-
-Classify as [TYPE: out_of_scope] if the user is asking the assistant to create a new artifact, report, essay, script, email, presentation, document, policy draft, or long-form generated content, even if the topic is related to company policy. The assistant may answer questions about policies, summarize what the handbook says, or explain policy details, but it should not generate standalone reports or documents.
-
-Examples:
-- "what benefits do employees get" -> [TYPE: policy]
-- "summarize the benefits policy" -> [TYPE: policy]
-- "write me a report on employee benefits" -> [TYPE: out_of_scope]
-- "write an email explaining the leave policy" -> [TYPE: out_of_scope]
-- "make me a presentation about PTO" -> [TYPE: out_of_scope]
-
 Question: {user_message}"""
-
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": augmented_message})
+    
+    messages = _build_messages(system_prompt, augmented_message, history)
 
     response = litellm.completion(
         model=MODEL_NAME,
@@ -149,4 +243,3 @@ Respond with a clear, direct, paragraph-style summary. Do not include any JSON, 
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"(Auto-summary fallback due to error: {str(e)}) " + (previous_summary or "")
-
