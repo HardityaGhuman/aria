@@ -29,7 +29,7 @@ _bm25_metadata = None
 SUPPORTED_EXTENSIONS = {".pdf"}
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
-CHUNK_VERSION = "2026-05-08-pdf-rag-v3"
+CHUNK_VERSION = "2026-06-18-pdf-rag-v4"
 MAX_DISTANCE = 0.8
 SECTION_SPLITTER = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
@@ -67,6 +67,10 @@ def get_vector_store():
             collection_name="company_docs",
             embedding_function=get_embedding_function(),
             persist_directory=CHROMA_DB_PATH,
+            # Use cosine distance so MAX_DISTANCE is a meaningful similarity
+            # cutoff. Chroma defaults to squared-L2, whose distances for these
+            # embeddings sit well above any reasonable threshold.
+            collection_metadata={"hnsw:space": "cosine"},
         )
     return _vector_store
 
@@ -150,17 +154,105 @@ def _load_document(filepath: str) -> list[Document]:
     return []
 
 
+def _looks_like_toc(page_text: str) -> bool:
+    """Heuristically decide whether a page is a table of contents.
+
+    Document-agnostic: a TOC is a page whose lines are mostly "<title> <page no>"
+    entries, or one that explicitly says "table of contents".
+    """
+    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+    if len(lines) < 5:
+        return False
+    if "table of contents" in " ".join(lines[:3]).lower():
+        return True
+    # TOC entries end in a page number, often after dotted leaders.
+    entry = re.compile(r".+\S[\s.]+\d{1,4}$")
+    matches = sum(1 for line in lines if entry.match(line))
+    return matches / len(lines) >= 0.6
+
+
+def _extract_toc_titles(toc_text: str) -> set[str]:
+    """Pull section titles out of TOC lines (dropping trailing page numbers).
+
+    These titles are used as section-boundary anchors in the body text, so a
+    document effectively describes its own structure.
+    """
+    titles = set()
+    for line in toc_text.splitlines():
+        line = line.strip()
+        match = re.match(r"^(.*\S)[\s.]+\d{1,4}$", line)
+        title = (match.group(1) if match else line).strip(" .")
+        if len(title) > 2 and not title.isdigit():
+            titles.add(title.lower())
+    return titles
+
+
+# Structured heading prefixes: Roman numerals (IV.), decimal (1. / 2.3), lettered (A.)
+_HEADING_PREFIX = re.compile(r"^(?:[IVXLCDM]+\.|\d+(?:\.\d+)*\.?|[A-Z]\.)\s+\S")
+
+
+def _is_heading(line: str, toc_titles: set[str]) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.lower() in toc_titles:
+        return True
+    return bool(_HEADING_PREFIX.match(stripped))
+
+
+def _split_into_sections(content: str, toc_titles: set[str]) -> list[tuple[str, str]]:
+    """Split body text at detected headings into (heading, text) pairs."""
+    sections: list[tuple[str, str]] = []
+    heading = ""
+    buffer: list[str] = []
+    for line in content.split("\n"):
+        if _is_heading(line, toc_titles):
+            if buffer:
+                sections.append((heading, "\n".join(buffer).strip()))
+            heading = line.strip()
+            buffer = [line]
+        else:
+            buffer.append(line)
+    if buffer:
+        sections.append((heading, "\n".join(buffer).strip()))
+    return [(h, text) for h, text in sections if text]
+
+
+def _merge_tiny_sections(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Fold heading-only / very short sections forward into the next one so we
+    don't emit tiny, low-signal chunks."""
+    merged: list[tuple[str, str]] = []
+    carry: tuple[str, str] | None = None
+    for heading, text in sections:
+        if carry:
+            heading, text = (carry[0] or heading), carry[1] + "\n\n" + text
+            carry = None
+        if len(text) < 200 and len(text.splitlines()) <= 2:
+            carry = (heading, text)
+        else:
+            merged.append((heading, text))
+    if carry:
+        if merged:
+            prev_heading, prev_text = merged[-1]
+            merged[-1] = (prev_heading, prev_text + "\n\n" + carry[1])
+        else:
+            merged.append(carry)
+    return merged
+
+
 def _chunk_text(pages: list[Document]) -> list[Document]:
     if not pages:
         return []
 
-    toc_pages = [p.page_content for p in pages if p.metadata.get("page") in (3, 4)]
-    content_pages = [p.page_content for p in pages if p.metadata.get("page") not in (3, 4)]
+    toc_pages = [p.page_content for p in pages if _looks_like_toc(p.page_content)]
+    content_pages = [p.page_content for p in pages if not _looks_like_toc(p.page_content)]
 
-    chunks = []
+    chunks: list[Document] = []
+    toc_titles: set[str] = set()
 
     if toc_pages:
         toc_full = _clean_text("\n\n".join(toc_pages))
+        toc_titles = _extract_toc_titles(toc_full)
         chunks.append(
             Document(
                 page_content=toc_full,
@@ -168,52 +260,17 @@ def _chunk_text(pages: list[Document]) -> list[Document]:
             )
         )
 
-    # Following section implements Structure-Aware chunking:
+    # Structure-aware chunking: split on detected headings, then fall back to a
+    # single block (recursively split downstream) when a PDF has no detectable
+    # structure, so retrieval still works on unstructured documents.
     if content_pages:
         content_full = _clean_text("\n\n".join(content_pages))
-        boundary_pattern = re.compile(r'\n\s*(?=(?:[IVX]+\.|[IVX]+\.[A-Z]\.|[A-Z]\.)\s+[A-Z])')
-        
-        sections = []
-        last_idx = 0
-        for match in boundary_pattern.finditer(content_full):
-            idx = match.start()
-            if idx > last_idx:
-                section = content_full[last_idx:idx].strip()
-                if section:
-                    sections.append(section)
-            last_idx = idx
-            
-        if last_idx < len(content_full):
-            section = content_full[last_idx:].strip()
-            if section:
-                sections.append(section)
+        sections = _split_into_sections(content_full, toc_titles)
+        if not sections:
+            sections = [("", content_full)]
 
-        merged_sections = []
-        buffer = ""
-        for section in sections:
-            if buffer:
-                section = buffer + "\n\n" + section
-                buffer = ""
-                
-            lines = [line for line in section.split('\n') if line.strip()]
-            if len(lines) <= 2 and len(section) < 200:
-                buffer = section
-            else:
-                merged_sections.append(section)
-                
-        if buffer:
-            if merged_sections:
-                merged_sections[-1] += "\n\n" + buffer
-            else:
-                merged_sections.append(buffer)
-
-        current_parent_section = ""
-        for section in merged_sections:
-            match = re.search(r'^([IVXLCDM]+)\.', section.strip())
-            if match:
-                current_parent_section = match.group(1)
-            
-            _add_section_chunks(section, chunks, "content", current_parent_section)
+        for heading, text in _merge_tiny_sections(sections):
+            _add_section_chunks(text, chunks, "content", heading[:120])
 
     return chunks
 
@@ -352,8 +409,13 @@ def retrieve_context(query: str, n_results: int = None) -> RetrievedContext:
         )
 
     # 1. Vector Search
+    # Embed the query with the same model used for the documents and pass the
+    # vector explicitly. Querying with query_texts would make Chroma fall back
+    # to its own default embedder, which only works here by coincidence (both
+    # happen to be all-MiniLM) and breaks silently if EMBEDDING_MODEL_NAME changes.
+    query_embedding = get_embedding_function().embed_query(query)
     vec_results = collection.query(
-        query_texts=[query],
+        query_embeddings=[query_embedding],
         n_results=BM25_CANDIDATE_POOL,
         where={"content_type": {"$ne": "toc"}},
         include=["documents", "metadatas", "distances"],
