@@ -22,7 +22,7 @@ from backend.core.llm import (
     count_tokens,
     summarize_history,
 )
-from backend.core.rag import initialize_vectorstore, list_policy_documents, retrieve_context
+from backend.core.rag import list_policy_documents, retrieve_context
 
 router = APIRouter()
 
@@ -40,20 +40,37 @@ class ChatResponse(BaseModel):
     sources: list[dict] = Field(default_factory=list)
 
 
+# A genuine "I can't answer this" reply is one or two short sentences. A real
+# answer that merely appends a "Not found in the provided documents:" note about
+# a missing detail is much longer — and that note must NOT cause us to discard
+# the sources the answer was actually built from.
+_FULL_REFUSAL_MAX_CHARS = 320
+
+
 def _is_insufficient_policy_answer(reply: str) -> bool:
-    normalized = reply.lower()
-    insufficient_markers = [
+    """True only when the reply is essentially a whole-answer refusal, so we can
+    suppress sources/context that were retrieved but not actually used.
+
+    Deliberately does NOT treat a trailing "Not found in the provided documents:"
+    note as insufficient: that note means the model *did* answer from the
+    documents and the sources remain valid.
+    """
+    normalized = reply.strip().lower()
+    refusal_markers = [
         "do not contain enough information",
         "don't contain enough information",
         "does not contain enough information",
         "uploaded documents don't contain",
         "uploaded policy documents do not contain",
         "provided documents do not contain",
-        "not found in the provided documents",
         "couldn't find specific information",
         "could not find specific information",
     ]
-    return any(marker in normalized for marker in insufficient_markers)
+    if not any(marker in normalized for marker in refusal_markers):
+        return False
+    # Only a short, refusal-dominated reply counts; a long answer that happens to
+    # mention missing details keeps its sources.
+    return len(normalized) <= _FULL_REFUSAL_MAX_CHARS
 
 
 # --- Endpoints ---
@@ -129,7 +146,7 @@ async def chat(req: ChatRequest):
 
     # Step 2: Branch on classification.
     if classification == "out_of_scope":
-        final_reply = "I'm a policy assistant and can only help with questions about company policies and operations."
+        final_reply = "I'm a company policy assistant, so I can only help with questions about company policies and operations. Please ask a policy-related question."
         final_context = ""
         final_sources = []
     elif classification == "meta":
@@ -201,19 +218,9 @@ async def chat(req: ChatRequest):
     )
 
 
-@router.post("/reindex")
-async def reindex_documents():
-    """Rebuild the vector index for new or changed local policy files."""
-    try:
-        stats = initialize_vectorstore()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"message": "Policy documents indexed.", "stats": stats}
-
-
 @router.get("/documents")
 async def documents():
-    """List local PDF policy documents available for ingestion."""
+    """List the local PDF policy documents that make up the indexed corpus."""
     return {"documents": list_policy_documents()}
 
 

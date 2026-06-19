@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 import streamlit as st
 import requests
@@ -8,10 +7,6 @@ import uuid
 # ── Config ──────────────────────────────────────────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 CHAT_ENDPOINT = f"{API_BASE_URL}/chat"
-DOCS_DIR = Path(os.getenv(
-    "DOCS_PATH",
-    Path(__file__).resolve().parents[1] / "backend" / "data" / "docs"
-))
 
 st.set_page_config(
     page_title="Company Policy Assistant",
@@ -46,50 +41,21 @@ st.divider()
 with st.sidebar:
     st.header("⚙️ Settings")
 
-    uploaded_files = st.file_uploader(
-        "Add policy PDFs",
-        type=["pdf"],
-        accept_multiple_files=True,
-        help="Upload company policy PDFs, then click Reindex."
-    )
-
-    if uploaded_files:
-        DOCS_DIR.mkdir(parents=True, exist_ok=True)
-        saved = []
-        for uploaded_file in uploaded_files:
-            destination = DOCS_DIR / uploaded_file.name
-            destination.write_bytes(uploaded_file.getbuffer())
-            saved.append(uploaded_file.name)
-        fetch_policy_documents.clear()
-        st.success(f"Saved {len(saved)} document(s).")
-
-    if st.button("Reindex policies", use_container_width=True):
-        try:
-            response = requests.post(f"{CHAT_ENDPOINT}/reindex", timeout=120)
-            response.raise_for_status()
-            fetch_policy_documents.clear()
-            stats = response.json().get("stats", {})
-            st.success(
-                f"Index ready: {stats.get('indexed', 0)} chunks indexed, "
-                f"{stats.get('skipped', 0)} files skipped."
-            )
-        except requests.exceptions.ConnectionError:
-            st.error("Backend is not running on port 8000.")
-        except Exception as e:
-            st.error(f"Could not reindex: {e}")
-
     try:
         documents = fetch_policy_documents()
     except Exception:
         documents = []
 
     if documents:
-        st.markdown("**Indexed document folder**")
+        st.markdown("**Indexed documents**")
         for document in documents:
             size_kb = document["size_bytes"] / 1024
             st.caption(f"{document['filename']} ({size_kb:.1f} KB)")
     else:
-        st.caption("Upload PDF policy files, then reindex before asking questions.")
+        st.caption(
+            "No documents indexed. An administrator adds PDFs to the docs "
+            "folder and runs the offline indexer."
+        )
 
     st.divider()
 

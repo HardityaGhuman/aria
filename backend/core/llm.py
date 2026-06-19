@@ -68,16 +68,29 @@ def classify_query(user_message: str, history: list[dict]) -> str:
 
 Return exactly one label and nothing else: policy, meta, or out_of_scope.
 
-Definitions:
-- policy: The user asks about a company rule, benefit, procedure, entitlement, handbook topic, or operational policy.
-- meta: The user asks about this conversation, previous messages, what has been discussed, how many questions were asked, or asks for a recap of the chat.
-- out_of_scope: The user asks for general knowledge, code, unrelated tasks, or asks the assistant to create a new artifact/report/email/document/presentation/script/essay/policy draft. Content-generation requests are out_of_scope even when the topic mentions company policy.
+Decide what the query is ABOUT, not what topic it mentions:
+- meta: the query is about THIS CONVERSATION itself — the messages exchanged, what the user asked, what the assistant previously said, or a recap/count of the chat. The answer comes from the conversation transcript, not from policy documents. Signals: "I/you/we" referring to earlier turns, "this conversation/chat", "so far", "earlier", "last/previous question or answer", "what did you say", "repeat that", "how many questions", "recap/summarize our discussion".
+- policy: the query asks for the SUBSTANCE of a company rule, benefit, procedure, entitlement, handbook topic, or operational policy. The answer comes from policy documents. This includes asking to summarize or explain a policy topic ("summarize the leave policy"), and follow-ups that ask for MORE policy detail ("tell me more about that", "what about sick leave") even though they reference the prior turn — those still need document content.
+- out_of_scope: general knowledge, code, unrelated tasks, or any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy.
+
+Disambiguation rules:
+- "summarize the <topic> policy" / "explain <topic>" -> policy (about document substance).
+- "summarize/recap what WE discussed" or "what have I asked" -> meta (about the conversation).
+- A follow-up that needs new policy facts -> policy, even if it says "you mentioned" or "earlier".
+- A follow-up answerable purely from prior messages (e.g. "what was my first question", "repeat your last answer") -> meta.
+- When a query mixes both, prefer meta only if it can be fully answered from the transcript without consulting documents.
 
 Examples:
 - "what benefits do employees get" -> policy
 - "summarize the benefits policy" -> policy
+- "tell me more about that" (after a policy answer) -> policy
+- "what about parental leave?" -> policy
 - "summarize what we discussed so far" -> meta
+- "what was the first question I asked" -> meta
+- "what did you just tell me about PTO" -> meta
 - "how many questions have I asked" -> meta
+- "can you repeat your previous answer" -> meta
+- "list everything I've asked in order" -> meta
 - "write me a report on employee benefits" -> out_of_scope
 - "write an email explaining the leave policy" -> out_of_scope
 - "what is the capital of France" -> out_of_scope

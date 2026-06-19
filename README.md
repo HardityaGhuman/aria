@@ -6,7 +6,8 @@ mind, stores them in ChromaDB, retrieves relevant policy context with a hybrid
 (keyword + semantic) search, and asks an LLM to answer **only** from that context.
 
 This project is intentionally demo-friendly: no auth, no accounts, no admin
-setup. Drop in policy PDFs, reindex, and ask questions.
+setup. Drop policy PDFs in the docs folder, run the offline indexer once, and
+ask questions.
 
 ## Tech Stack
 
@@ -28,15 +29,18 @@ is swappable through env vars — no code changes. Set `MODEL_NAME` to any
 
 ## How It Works
 
-1. Add `.pdf` policy files through the Streamlit sidebar or place them in
-   `backend/data/docs/`.
-2. Click **Reindex policies**. The backend:
+1. Place `.pdf` policy files in `backend/data/docs/`.
+2. Run the **offline indexer** once (`python -m backend.index_documents`). It:
    - extracts text per page with `pypdf`,
    - auto-detects table-of-contents pages and uses them to drive
-     **structure-aware chunking** (splitting on section headings, with a
-     graceful fallback to recursive splitting for unstructured PDFs),
+     **structure-aware chunking** (splitting on section headings, folding short
+     heading/intro blurbs into the following section, with a graceful fallback to
+     recursive splitting for unstructured PDFs),
    - embeds each chunk and stores it in ChromaDB. Unchanged files are skipped
-     via a content hash.
+     via a content hash; bump `CHUNK_VERSION` to force a rebuild.
+
+   Indexing is offline-only: the running API server reads the prebuilt index and
+   never ingests PDFs at request time.
 3. Each incoming question is first **classified** by a small router model into
    one of three routes:
    - `policy` → run hybrid retrieval and answer from the retrieved context,
@@ -46,7 +50,9 @@ is swappable through env vars — no code changes. Set `MODEL_NAME` to any
      etc.).
 4. For `policy` queries, **hybrid retrieval** runs BM25 keyword search and
    vector similarity search in parallel, then fuses the rankings with
-   Reciprocal Rank Fusion (RRF) to pick the top chunks.
+   Reciprocal Rank Fusion (RRF) to pick the top chunks. BM25 tokens are
+   plural-normalized (so "leaves" matches "leave") and low-scoring keyword
+   candidates are floored out to keep generic-token noise from polluting results.
 5. The LLM answers using the retrieved policy context plus recent session
    history. The system prompt constrains it to the provided context and a
    refusal guardrail.
@@ -156,22 +162,21 @@ streamlit run app.py
 | `MAX_HISTORY_TOKENS` | `2000` | Token budget before history is summarized |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence-transformers embedding model |
 | `EMBEDDINGS_LOCAL_ONLY` | `true` | Use only locally cached embedding weights |
-| `RETRIEVAL_TOP_K` | `3` | Number of chunks passed to the LLM |
+| `RETRIEVAL_TOP_K` | `6` | Number of chunks passed to the LLM |
 | `RRF_K_CONSTANT` | `60` | Reciprocal Rank Fusion smoothing constant |
 | `BM25_CANDIDATE_POOL` | `10` | Candidate pool size per retriever before fusion |
 | `EXPAND_SECTION_RETRIEVAL` | `false` | Pull in sibling chunks from the same section |
 
 ## Demo Flow
 
-1. Open the Streamlit app.
-2. Upload one or more company policy PDFs in the sidebar.
-3. Click **Reindex policies**.
-4. Ask grounded questions such as:
+1. Add policy PDFs to `backend/data/docs/` and run `python -m backend.index_documents`.
+2. Open the Streamlit app (the sidebar lists the indexed documents).
+3. Ask grounded questions such as:
    - "How many days of PTO do employees get?"
    - "What is the remote work policy?"
    - "How does bereavement leave work?"
-5. Turn on **Show retrieved context** to see the RAG evidence behind the answer.
-6. Ask an out-of-scope question such as "What is the capital of France?" to see
+4. Turn on **Show retrieved context** to see the RAG evidence behind the answer.
+5. Ask an out-of-scope question such as "What is the capital of France?" to see
    the bot refuse rather than invent an answer.
 
 ## API
@@ -179,14 +184,15 @@ streamlit run app.py
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/chat` | Ask a question and receive an answer with context and sources |
-| `POST` | `/chat/reindex` | Ingest new or changed PDF policy files |
-| `GET` | `/chat/documents` | List PDF policy files available for ingestion |
+| `GET` | `/chat/documents` | List the PDF policy files in the indexed corpus |
 | `GET` | `/chat/history/{session_id}` | Get persisted session chat history |
 | `DELETE` | `/chat/history/{session_id}` | Clear persisted session chat history |
 
 ## Notes
 
-- Changed policy files are automatically reindexed based on a content hash, and
-  reindexing is also triggered when the chunking version changes.
-- ChromaDB data and uploaded policy documents are ignored by git.
+- Indexing is offline-only via `python -m backend.index_documents`. Changed
+  files are re-indexed based on a content hash, and a rebuild is also triggered
+  when `CHUNK_VERSION` changes. `start.sh` runs the indexer once if no index
+  exists yet.
+- ChromaDB data and policy documents are ignored by git.
 - This is a local demo app with no auth by design.

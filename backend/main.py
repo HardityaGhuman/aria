@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.routes.chat import router as chat_router
 from backend.core.chat_memory import initialize_chat_memory
-from backend.core.rag import initialize_vectorstore
+from backend.core.rag import get_collection
 
 app = FastAPI(
     title="Company Chatbot API",
@@ -28,13 +28,23 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Load documents into ChromaDB on startup."""
+    """Prepare chat memory and verify the prebuilt vector index is present.
+
+    Documents are indexed offline (see backend/index_documents.py); the server
+    only reads the existing index and never ingests PDFs at runtime.
+    """
     print("Initializing chat memory...")
     initialize_chat_memory()
     print("Chat memory ready.")
-    print("Initializing vector store...")
-    initialize_vectorstore()
-    print("Vector store ready.")
+
+    chunk_count = get_collection().count()
+    if chunk_count == 0:
+        print(
+            "WARNING: vector store is empty. Run the offline indexer before "
+            "asking questions:\n    python -m backend.index_documents"
+        )
+    else:
+        print(f"Vector store ready ({chunk_count} chunks).")
 
 app.include_router(chat_router, prefix="/chat", tags=["Chat"])
 

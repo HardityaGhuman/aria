@@ -17,6 +17,14 @@ if [[ ! -f "$ROOT_DIR/backend/.env" ]]; then
   exit 1
 fi
 
+# Documents are indexed offline, not by the running server. Build the index once
+# if it doesn't exist yet; rerun `python -m backend.index_documents` by hand
+# whenever the policy PDFs or chunking logic change.
+if [[ ! -f "$ROOT_DIR/backend/data/chroma_db/chroma.sqlite3" ]]; then
+  echo "No vector index found. Running one-time offline indexer..."
+  (cd "$ROOT_DIR" && "$VENV_PYTHON" -m backend.index_documents)
+fi
+
 cleanup() {
   if [[ -n "${BACKEND_PID:-}" ]]; then
     kill "$BACKEND_PID" >/dev/null 2>&1 || true

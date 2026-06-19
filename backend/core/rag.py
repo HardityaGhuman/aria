@@ -29,8 +29,15 @@ _bm25_metadata = None
 SUPPORTED_EXTENSIONS = {".pdf"}
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
-CHUNK_VERSION = "2026-06-18-pdf-rag-v4"
+CHUNK_VERSION = "2026-06-19-pdf-rag-v5"
 MAX_DISTANCE = 0.8
+# Sections shorter than this are treated as heading/intro blurbs ("In this
+# section we explain...") and folded forward into the next real section, so they
+# don't survive as low-content chunks that win retrieval slots without payload.
+THIN_SECTION_CHARS = 250
+# A BM25 candidate must score at least this fraction of the best score for the
+# query to enter the pool, so trivial single-token overlaps don't pollute results.
+BM25_MIN_SCORE_RATIO = 0.15
 SECTION_SPLITTER = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
@@ -88,9 +95,30 @@ BM25_STOPWORDS = {
     "have", "had", "been", "with", "from", "about", "which", "when", "who"
 }
 
+def _stem(token: str) -> str:
+    """Conservative plural/inflection normaliser so lexical search matches across
+    number (e.g. "leaves"->"leave", "holidays"->"holiday", "policies"->"policy").
+
+    Document-agnostic and deliberately minimal: it only strips common English
+    plural endings and guards against false roots like "process"->"proces".
+    BM25 has no built-in stemming, so without this a query for "types of leaves"
+    scores zero against documents that say "leave", which is exactly how the leave
+    queries lost their relevant chunks.
+    """
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if (
+        len(token) > 3
+        and token.endswith("s")
+        and not token.endswith(("ss", "us", "is"))
+    ):
+        return token[:-1]
+    return token
+
+
 def tokenize_for_bm25(text: str) -> list[str]:
     tokens = re.findall(r'\w+', text.lower())
-    return [t for t in tokens if t not in BM25_STOPWORDS]
+    return [_stem(t) for t in tokens if t not in BM25_STOPWORDS]
 
 def get_bm25_index():
     global _bm25_corpus, _bm25_index, _bm25_metadata
@@ -227,7 +255,7 @@ def _merge_tiny_sections(sections: list[tuple[str, str]]) -> list[tuple[str, str
         if carry:
             heading, text = (carry[0] or heading), carry[1] + "\n\n" + text
             carry = None
-        if len(text) < 200 and len(text.splitlines()) <= 2:
+        if len(text) < THIN_SECTION_CHARS:
             carry = (heading, text)
         else:
             merged.append((heading, text))
@@ -440,9 +468,14 @@ def retrieve_context(query: str, n_results: int = None) -> RetrievedContext:
         tokenized_query = tokenize_for_bm25(query)
         bm25_scores = bm25_index.get_scores(tokenized_query)
         scored_indices = sorted(enumerate(bm25_scores), key=lambda x: x[1], reverse=True)[:BM25_CANDIDATE_POOL]
-        
+
+        # Floor relative to the best score so chunks that merely share a generic
+        # token (e.g. "types", "get") don't enter the pool as noise.
+        top_score = scored_indices[0][1] if scored_indices else 0.0
+        min_score = top_score * BM25_MIN_SCORE_RATIO
+
         for idx, score in scored_indices:
-            if score > 0:
+            if score > 0 and score >= min_score:
                 meta = bm25_metadata[idx]
                 chunk = bm25_corpus[idx]
                 chunk_id = f"{meta.get('source')}:{meta.get('chunk')}"
