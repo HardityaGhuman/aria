@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.rag import initialize_vectorstore
+from backend.rag import initialize_vectorstore
 
 
 def main() -> int:
