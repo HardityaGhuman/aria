@@ -15,6 +15,10 @@ EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "t
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "6"))
 RRF_K_CONSTANT = int(os.getenv("RRF_K_CONSTANT", "60"))
 BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "10"))
+# Active retrieval strategy for the live chat flow: "vector", "bm25", or "hybrid".
+RETRIEVAL_STRATEGY = os.getenv("RETRIEVAL_STRATEGY", "hybrid")
+# Rewrite the user's query (history-aware) before retrieval to resolve follow-ups.
+QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
 # Base directory is "backend/"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")

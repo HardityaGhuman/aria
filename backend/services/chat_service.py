@@ -19,7 +19,11 @@ from backend.core.chat_memory import (
     get_session_summary,
     update_session_summary,
 )
-from backend.core.config import LLM_TIMEOUT_SECONDS, MAX_HISTORY_TOKENS
+from backend.core.config import (
+    LLM_TIMEOUT_SECONDS,
+    MAX_HISTORY_TOKENS,
+    QUERY_REWRITE_ENABLED,
+)
 from backend.core.evaluation import evaluate_answer
 from backend.core.llm import (
     classify_query,
@@ -29,7 +33,7 @@ from backend.core.llm import (
     summarize_history,
 )
 from backend.core.logging import get_logger
-from backend.rag import retrieve_context
+from backend.rag import retrieve_context, rewrite_query
 
 logger = get_logger(__name__)
 
@@ -134,8 +138,23 @@ def _prepare_history(session_id: str) -> list[dict]:
     return formatted_history
 
 
+async def _resolve_search_query(message: str, formatted_history: list[dict]) -> str:
+    """Rewrite the message into a standalone search query (history-aware) so
+    follow-ups retrieve correctly. Falls back to the original on any failure."""
+    if not QUERY_REWRITE_ENABLED:
+        return message
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(rewrite_query, message, formatted_history),
+            timeout=LLM_TIMEOUT_SECONDS + 5,
+        )
+    except Exception:
+        return message
+
+
 async def _answer_policy_query(message: str, formatted_history: list[dict]) -> ChatResult:
-    retrieved = retrieve_context(message)
+    search_query = await _resolve_search_query(message, formatted_history)
+    retrieved = retrieve_context(search_query)
     if not retrieved.sources:
         return ChatResult(NO_RESULTS_MESSAGE, "", [])
 

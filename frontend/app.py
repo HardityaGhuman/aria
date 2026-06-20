@@ -1,16 +1,22 @@
 import os
 import time
 import uuid
+from pathlib import Path
 
 import streamlit as st
 import requests
+from dotenv import load_dotenv
+
+# Load backend/.env so values set there (DOC_DRIVE_URL, API_BASE_URL) are visible
+# to the frontend too — Streamlit doesn't read it on its own.
+load_dotenv(Path(__file__).resolve().parents[1] / "backend" / ".env")
 
 # ── Config ──────────────────────────────────────────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 CHAT_ENDPOINT = f"{API_BASE_URL}/chat"
-# When the policy PDF lives in Google Drive, set DOC_DRIVE_URL to its public
-# share link and the sidebar shows a link button instead of serving the local
-# file. Left unset, we serve the indexed PDF straight from the backend.
+# When the policy PDFs live in Google Drive, set DOC_DRIVE_URL to the public
+# share link; the sidebar then shows a single link to it (shown regardless of
+# backend/index state). Left unset, we serve indexed PDFs from the backend.
 DOC_DRIVE_URL = os.getenv("DOC_DRIVE_URL", "").strip()
 
 st.set_page_config(page_title="Aria · Policy Assistant", layout="centered")
@@ -107,17 +113,20 @@ def call_evaluate(message: str, reply: str, context: str) -> dict:
 with st.sidebar:
     st.markdown("### Policy Library")
 
-    try:
-        documents = fetch_policy_documents()
-    except Exception:
-        documents = []
+    if DOC_DRIVE_URL:
+        # Hosted documents: one link to the shared drive, independent of the
+        # backend so it always shows even before the index is built.
+        st.link_button("Open policy documents", DOC_DRIVE_URL, use_container_width=True)
+    else:
+        # Local mode: list indexed PDFs with download buttons from the backend.
+        try:
+            documents = fetch_policy_documents()
+        except Exception:
+            documents = []
 
-    if documents:
-        for document in documents:
-            name = document["filename"]
-            if DOC_DRIVE_URL:
-                st.link_button(name, DOC_DRIVE_URL, use_container_width=True)
-            else:
+        if documents:
+            for document in documents:
+                name = document["filename"]
                 try:
                     st.download_button(
                         name,
@@ -128,8 +137,8 @@ with st.sidebar:
                     )
                 except Exception:
                     st.caption(name)
-    else:
-        st.caption("No policy documents are indexed yet.")
+        else:
+            st.caption("No policy documents are indexed yet.")
 
     st.divider()
     if st.button("Clear conversation", use_container_width=True):
