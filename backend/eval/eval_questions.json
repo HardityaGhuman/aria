@@ -1,0 +1,249 @@
+[
+  {
+    "question": "How many days of paid time off do employees get per year?",
+    "ground_truth": "Employees receive 20 days of paid time off per year, accruing at 1.7 days per month, with a cap of 25 days overall.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Paid time off (PTO)"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How much paid sick leave is offered?",
+    "ground_truth": "The company offers one week of paid sick leave to recover from short-term illness or injury.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Sick leave"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How many days of bereavement leave can I take?",
+    "ground_truth": "Employees get three days of paid bereavement leave, with two additional unpaid days for long-distance travel.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Bereavement leave"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What time off do I get for jury duty and voting?",
+    "ground_truth": "Exempt employees get one day off for jury duty without salary deduction, and two hours off to vote on election day.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Jury duty and voting"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How long is maternity and paternity leave?",
+    "ground_truth": "The company offers three months of paid maternity and paternity leave, with an optional unpaid extension of up to two months.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Paternity and maternity leave"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What leave is available for a long-term illness?",
+    "ground_truth": "Eligible employees can take 12 weeks of unpaid, job-protected FMLA leave in a 12-month period for serious medical or family reasons.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Long-term illness"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How often can I work from home?",
+    "ground_truth": "Employees can normally work from home one day per week, and should inform their manager at least two days in advance.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Work from home"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What is the remote working policy?",
+    "ground_truth": "Office-based employees may work remotely for a maximum of two consecutive weeks per year, requested at least one week in advance.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Remote working"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What holidays does the company observe?",
+    "ground_truth": "The company observes holidays such as New Year's Day, Memorial Day, Independence Day, Thanksgiving, and Christmas, plus a floating day.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Holidays"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "Who should I contact if I am being harassed at work?",
+    "ground_truth": "You can talk to the offender directly for minor cases, or report to your manager or HR, who will investigate confidentially.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Harassment and violence"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What is the company policy on employing relatives?",
+    "ground_truth": "Employees can refer relatives, but cannot be in a supervisory or reporting relationship with a relative or on a hiring committee interviewing one.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Employment of relatives"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How much money can I spend on personal development?",
+    "ground_truth": "Employees have an annual budget of 1,000 dollars for educational activities, courses, subscriptions, and books, submitted to HR for approval.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Employee training and development"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "How much notice should I give when resigning?",
+    "ground_truth": "Employees are asked to give at least two weeks notice, or a month for highly specialized or executive positions.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Resignation"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What are the steps in the progressive discipline process?",
+    "ground_truth": "The progressive discipline process has six steps: verbal warning, informal meeting, formal reprimand, formal disciplinary meeting, penalties, and termination.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Progressive discipline"],
+    "difficulty": "easy"
+  },
+  {
+    "question": "What are the rules for using a company car?",
+    "ground_truth": "A company car must be used responsibly, kept locked and maintained, used only for approved business expenses, and not smoked in or lent to others.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Company car"],
+    "difficulty": "easy"
+  },
+
+  {
+    "question": "Can I get reimbursed for a hotel and meals during a business trip?",
+    "ground_truth": "The company reimburses approved, business-related travel expenses such as accommodation and meals; submit them for approval.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Employee expenses"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "If my manager asks me to stay past my normal hours, am I owed extra pay?",
+    "ground_truth": "Non-exempt employees are paid overtime at one and a half times their wage; exempt employees are generally not entitled to overtime pay.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Overtime"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "Am I allowed to date someone I work with?",
+    "ground_truth": "Workplace relationships are permitted within reason, but employees must avoid conflicts of interest and relationships within a reporting line.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Employee relationships"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "Can I invite a friend to the office to meet me during the day?",
+    "ground_truth": "Visitors require prior permission, must sign in and show identification, and the host is responsible for them while on premises.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Workplace visitors"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "Is there any restriction on what I post about the company online?",
+    "ground_truth": "Employees must follow the social media policy, avoid disclosing confidential information, and be respectful when referencing the company online.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Social media"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "Do I get an assigned parking space at the office?",
+    "ground_truth": "Parking is prioritized for employees with disabilities, executives, and company-vehicle drivers, with remaining spaces allocated first-come, first-served.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Parking"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "What does the company do to keep us safe on site?",
+    "ground_truth": "The company maintains workplace safety and health measures, including preventative action and emergency procedures, to protect employees.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Workplace safety and health"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "Can I sell tickets for my child's fundraiser to colleagues at work?",
+    "ground_truth": "Solicitation and distribution are limited; personal commercial solicitation among employees is generally restricted, with exceptions for company-sponsored causes.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Solicitation and distribution"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "What happens to vacation days I haven't used if I leave the company?",
+    "ground_truth": "On leaving, accrued PTO may be compensated in the final paycheck according to local law, generally for employees not terminated for cause.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Paid time off (PTO)"],
+    "difficulty": "moderate"
+  },
+  {
+    "question": "If I get hurt while doing my job, does the company cover it?",
+    "ground_truth": "Work-related injuries are covered under workers' compensation as provided by law.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Workers’ compensation"],
+    "difficulty": "moderate"
+  },
+
+  {
+    "question": "A senior keeps threatening to fire my coworker if she reports his behavior. What is the right course of action?",
+    "ground_truth": "The behavior should be reported to HR, who investigate harassment confidentially; retaliation is not permitted and serious offenses can lead to termination.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Harassment and violence"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "I'm expecting a baby and want some time off before the birth plus flexibility when I return. What does the company provide?",
+    "ground_truth": "The company offers paid maternity and paternity leave, allows taking part of it before labor, and supports returning parents with flexible options.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Paternity and maternity leave", "Parental leave"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "I've already had a verbal warning and a written reprimand for the same issue, and a formal meeting is now scheduled. What comes next and could I lose my job?",
+    "ground_truth": "Progressive discipline escalates through formal disciplinary steps and penalties, and can ultimately result in termination for unresolved or serious issues.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Progressive discipline"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "A vendor I'm responsible for managing offered me an expensive gift. Is accepting it a problem?",
+    "ground_truth": "Accepting such a gift can create a conflict of interest; employees must avoid situations where personal interests conflict with their responsibilities.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Conflict of interest"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "If I'm out sick for more than three days, does the company need any documentation, and can I just work from home instead?",
+    "ground_truth": "For absences beyond three days the company may request a physician's note; employees may take a partial day or work from home but are advised to rest.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Sick leave"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "My position is being eliminated in a restructuring. What am I entitled to?",
+    "ground_truth": "Termination without cause covers redundancies; the company follows applicable notice and payout laws and offers severance to eligible employees.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Termination"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "Can the company let me go immediately without going through the usual warning steps?",
+    "ground_truth": "Employment is at-will, so the company may terminate directly without progressive discipline, and may dismiss without warning for serious offenses.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Termination", "Progressive discipline"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "I'll be handling confidential client data while working remotely. What rules apply to me?",
+    "ground_truth": "Remote workers must follow the same confidentiality and data-protection policies as office staff and use secure connections and devices.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Workplace policies", "Remote working"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "A colleague is spreading rumors about my personal life and singling me out for tasks unrelated to my job. Does that violate policy, and what can I do?",
+    "ground_truth": "Spreading rumors and singling someone out are examples of harassment; you can address minor cases directly or report to your manager or HR.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Harassment and violence"],
+    "difficulty": "hard"
+  },
+  {
+    "question": "I want to grow professionally through courses and attend an industry conference. What support exists and who signs off on it?",
+    "ground_truth": "The company supports training and development including courses and conference seats, with a personal development budget approved through HR.",
+    "expected_sources": ["Employee-Handbook.pdf"],
+    "expected_sections": ["Employee training and development"],
+    "difficulty": "hard"
+  }
+]

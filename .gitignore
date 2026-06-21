@@ -38,6 +38,9 @@ backend/data/
 *.log
 logs/
 
+# Evaluation run outputs (keep the harness, not every run)
+backend/eval/results/
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
