@@ -24,7 +24,6 @@ from backend.core.config import (
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
 )
-from backend.core.evaluation import evaluate_answer
 from backend.core.llm import (
     classify_query,
     count_tokens,
@@ -207,14 +206,3 @@ async def generate_chat_reply(session_id: str, message: str) -> ChatResult:
         raise HTTPException(status_code=503, detail=e.message)
 
     return result
-
-
-async def score_answer(message: str, reply: str, context: str) -> dict:
-    """Score one already-generated answer for the live evaluation tab."""
-    return await _run_blocking(
-        evaluate_answer,
-        timeout_detail="Evaluation timed out.",
-        question=message,
-        answer=reply,
-        context=context,
-    )

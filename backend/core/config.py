@@ -8,6 +8,8 @@ load_dotenv(env_path)
 MODEL_NAME = os.getenv("MODEL_NAME", "groq/llama-3.3-70b-versatile")
 ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", "groq/llama-3.1-8b-instant")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+# Provider tokens-per-minute budget, used to throttle batch evaluation runs.
+LLM_TOKENS_PER_MINUTE = int(os.getenv("LLM_TOKENS_PER_MINUTE", "12000"))
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_chatbot")
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")

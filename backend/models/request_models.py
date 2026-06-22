@@ -15,14 +15,3 @@ class ChatRequest(BaseModel):
         default="demo",
         description="Conversation id; each session keeps its own history.",
     )
-
-
-class EvaluateRequest(BaseModel):
-    """Body for ``POST /chat/evaluate`` — scores one already-generated answer."""
-
-    message: str = Field(..., description="The original user question.")
-    reply: str = Field(..., description="The assistant's answer to score.")
-    context_used: str = Field(
-        default="",
-        description="The retrieved context the answer was grounded in.",
-    )
