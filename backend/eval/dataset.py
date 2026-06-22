@@ -36,3 +36,14 @@ def load_eval_dataset(path: str | Path | None = None) -> list[dict]:
 
 def get_questions(path: str | Path | None = None) -> list[str]:
     return [item["question"] for item in load_eval_dataset(path)]
+
+
+def sample_by_difficulty(per_level: int = 5, path: str | Path | None = None) -> list[dict]:
+    """Return up to ``per_level`` items from each difficulty (easy/moderate/hard),
+    in difficulty order — a stratified subset for balanced evaluation runs."""
+    dataset = load_eval_dataset(path)
+    subset = []
+    for level in ("easy", "moderate", "hard"):
+        items = [d for d in dataset if d.get("difficulty", "easy") == level]
+        subset.extend(items[:per_level])
+    return subset

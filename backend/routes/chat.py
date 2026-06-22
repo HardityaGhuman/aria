@@ -18,9 +18,9 @@ from backend.core.chat_memory import (
     get_history as get_session_history,
 )
 from backend.core.config import DOCS_PATH
-from backend.models import ChatRequest, ChatResponse, EvaluateRequest
+from backend.models import ChatRequest, ChatResponse
 from backend.rag import list_policy_documents
-from backend.services.chat_service import generate_chat_reply, score_answer
+from backend.services.chat_service import generate_chat_reply
 
 router = APIRouter()
 
@@ -35,12 +35,6 @@ async def chat(req: ChatRequest):
         context_used=result.context_used,
         sources=result.sources,
     )
-
-
-@router.post("/evaluate")
-async def evaluate(req: EvaluateRequest):
-    """Score one answer (faithfulness / relevance) for the live metrics tab."""
-    return await score_answer(req.message, req.reply, req.context_used)
 
 
 @router.get("/documents")

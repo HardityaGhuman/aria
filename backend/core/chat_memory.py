@@ -12,6 +12,10 @@ from backend.core.config import DATABASE_URL
 class ChatMemoryError(Exception):
     message: str
 
+# You can't run SQL on a connection directly in psycopg — 
+# you must go through a cursor. So any function that talks to the DB needs one. 
+# That's why it appears in all 9 functions, not because it's special, 
+# but because it's the mandatory entry point for executing a query.
 
 def _connect():
     try:

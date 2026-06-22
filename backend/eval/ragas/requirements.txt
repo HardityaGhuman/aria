@@ -1,0 +1,13 @@
+# Dependencies for the ISOLATED RAGAS evaluation environment only.
+# These conflict with the app's LangChain pins, so they live in a separate
+# virtualenv (eval_venv) and never touch the running app.
+#
+# Setup:
+#   python -m venv eval_venv
+#   eval_venv/bin/pip install -r backend/eval/ragas/requirements.txt
+ragas>=0.2,<0.3
+datasets>=2.14,<4
+langchain-groq>=0.2,<0.3
+langchain-huggingface>=0.1,<0.2
+sentence-transformers>=2.6
+python-dotenv>=1.0

@@ -1,27 +1,27 @@
-# Aria - Company Policy RAG Chatbot
+# Aria — Company Policy RAG Chatbot
 
-Aria is an internal chatbot that answers employee questions from uploaded company
-policy documents. It ingests PDF files, chunks them with document structure in
-mind, stores them in ChromaDB, retrieves relevant policy context with a hybrid
+Aria is an internal chatbot that answers employee questions from company policy
+documents. It ingests PDFs, chunks them with document structure in mind, stores
+them in ChromaDB, retrieves relevant policy context with a hybrid
 (keyword + semantic) search, and asks an LLM to answer **only** from that context.
 
-This project is intentionally demo-friendly: no auth, no accounts, no admin
-setup. Drop policy PDFs in the docs folder, run the offline indexer once, and
-ask questions.
+This repository is the **base version** (`app-base`): a working local, single-user
+RAG pipeline (FastAPI + Streamlit + PostgreSQL + ChromaDB). It is the foundation
+for a larger build-out — see [Project Direction](#project-direction).
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| LLM | LiteLLM (provider-agnostic — Gemini, OpenAI, Groq, Anthropic, …) |
+| LLM | LiteLLM (provider-agnostic — Groq, Gemini, OpenAI, Anthropic, …) |
 | Backend | FastAPI |
+| Frontend | Streamlit (throwaway; a React frontend is planned) |
 | Vector DB | ChromaDB (cosine distance, via `langchain-chroma`) |
 | Hybrid retrieval | BM25 (`rank_bm25`) + vector search, fused with Reciprocal Rank Fusion |
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`, via `langchain-huggingface`) |
 | Chunking | Structure-aware (`langchain-text-splitters`) |
 | Chat Memory | PostgreSQL (with rolling summarization) |
 | PDF parsing | `pypdf` |
-| Frontend | Streamlit |
 
 The LLM layer uses [LiteLLM](https://docs.litellm.ai/docs/providers), so the model
 is swappable through env vars — no code changes. Set `MODEL_NAME` to any
@@ -46,13 +46,14 @@ is swappable through env vars — no code changes. Set `MODEL_NAME` to any
    - `policy` → run hybrid retrieval and answer from the retrieved context,
    - `meta` → answer from the conversation history only (e.g. "what did we
      discuss?"),
-   - `out_of_scope` → politely refuse (general knowledge, content generation,
-     etc.).
-4. For `policy` queries, **hybrid retrieval** runs BM25 keyword search and
-   vector similarity search in parallel, then fuses the rankings with
-   Reciprocal Rank Fusion (RRF) to pick the top chunks. BM25 tokens are
-   plural-normalized (so "leaves" matches "leave") and low-scoring keyword
-   candidates are floored out to keep generic-token noise from polluting results.
+   - `out_of_scope` → politely refuse (general knowledge, content generation, etc.).
+4. For `policy` queries, the message is first **rewritten into a standalone search
+   query** (history-aware, so follow-ups like "what about part-time?" resolve
+   correctly), then **hybrid retrieval** runs BM25 keyword search and vector
+   similarity search and fuses the rankings with Reciprocal Rank Fusion (RRF).
+   BM25 tokens are plural-normalized (so "leaves" matches "leave") and
+   low-scoring keyword candidates are floored out to keep generic-token noise
+   from polluting results.
 5. The LLM answers using the retrieved policy context plus recent session
    history. The system prompt constrains it to the provided context and a
    refusal guardrail.
@@ -69,7 +70,7 @@ flowchart TD
     F --> R{Classify query}
     R -->|out_of_scope| X[Refusal]
     R -->|meta| M[Answer from history]
-    R -->|policy| H[Hybrid retrieval: BM25 + vector → RRF]
+    R -->|policy| Q[Rewrite query] --> H[Hybrid retrieval: BM25 + vector → RRF]
     H --> D
     D --> H
     F --> P[(PostgreSQL chat memory)]
@@ -96,8 +97,8 @@ brew services start postgresql@16
 createdb company_chatbot
 ```
 
-Create `backend/.env` (see `backend/.env.example`). Only set the API key for the
-provider you actually use:
+Create `backend/.env` from the template (`backend/.env.example` is the source of
+truth) and set **only** the API key for the provider you use:
 
 ```ini
 # Pick one provider's key + matching MODEL_NAME
@@ -110,15 +111,11 @@ LLM_TIMEOUT_SECONDS=45
 DATABASE_URL=postgresql://localhost:5432/company_chatbot
 MAX_HISTORY_TOKENS=2000
 
-# Embeddings
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-EMBEDDINGS_LOCAL_ONLY=true
-
 # Retrieval tuning
-RETRIEVAL_TOP_K=3
-RRF_K_CONSTANT=60
+RETRIEVAL_TOP_K=6
 BM25_CANDIDATE_POOL=10
-EXPAND_SECTION_RETRIEVAL=false
+RETRIEVAL_STRATEGY=hybrid       # vector | bm25 | hybrid
+QUERY_REWRITE_ENABLED=true      # history-aware follow-up rewriting
 
 # Paths (relative to backend/)
 DOCS_PATH=./data/docs
@@ -128,23 +125,23 @@ SYSTEM_PROMPT_PATH=../docs/system_prompt.txt
 
 > Any [LiteLLM provider](https://docs.litellm.ai/docs/providers) works — e.g.
 > `MODEL_NAME=groq/llama-3.3-70b-versatile` with `GROQ_API_KEY`, or
-> `openai/gpt-4o` with `OPENAI_API_KEY`. `ROUTER_MODEL_NAME` is the small,
-> cheap model used for query classification; omit it to reuse `MODEL_NAME`.
+> `openai/gpt-4o` with `OPENAI_API_KEY`. `ROUTER_MODEL_NAME` is the small, cheap
+> model used for query classification and rewriting.
 
-Run the app:
+Build the index, then run the app:
 
 ```bash
+# Build the vector index once (and again when PDFs or chunking logic change)
+python -m backend.index_documents
+
 # One command (starts backend + frontend)
 ./start.sh
 
 # …or run them separately:
 # Terminal 1
-cd backend
-python main.py
-
+cd backend && python main.py
 # Terminal 2
-cd frontend
-streamlit run app.py
+cd frontend && streamlit run app.py
 ```
 
 - Frontend: http://localhost:8501
@@ -155,17 +152,18 @@ streamlit run app.py
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MODEL_NAME` | `gemini/gemini-3.5-flash` | Main answering model (`provider/model_id`) |
-| `ROUTER_MODEL_NAME` | `MODEL_NAME` | Small model for query classification |
+| `MODEL_NAME` | `groq/llama-3.3-70b-versatile` | Main answering model (`provider/model_id`) |
+| `ROUTER_MODEL_NAME` | `groq/llama-3.1-8b-instant` | Small model for classification + query rewriting |
 | `LLM_TIMEOUT_SECONDS` | `45` | Per-call LLM timeout |
 | `DATABASE_URL` | `postgresql://localhost:5432/company_chatbot` | PostgreSQL chat memory |
 | `MAX_HISTORY_TOKENS` | `2000` | Token budget before history is summarized |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence-transformers embedding model |
 | `EMBEDDINGS_LOCAL_ONLY` | `true` | Use only locally cached embedding weights |
+| `RETRIEVAL_STRATEGY` | `hybrid` | `vector`, `bm25`, or `hybrid` |
 | `RETRIEVAL_TOP_K` | `6` | Number of chunks passed to the LLM |
 | `RRF_K_CONSTANT` | `60` | Reciprocal Rank Fusion smoothing constant |
 | `BM25_CANDIDATE_POOL` | `10` | Candidate pool size per retriever before fusion |
-| `EXPAND_SECTION_RETRIEVAL` | `false` | Pull in sibling chunks from the same section |
+| `QUERY_REWRITE_ENABLED` | `true` | History-aware query rewriting before retrieval |
 
 ## Demo Flow
 
@@ -175,7 +173,8 @@ streamlit run app.py
    - "How many days of PTO do employees get?"
    - "What is the remote work policy?"
    - "How does bereavement leave work?"
-4. Turn on **Show retrieved context** to see the RAG evidence behind the answer.
+4. Answers cite their sources; click a document in the sidebar to read the
+   original and cross-check.
 5. Ask an out-of-scope question such as "What is the capital of France?" to see
    the bot refuse rather than invent an answer.
 
@@ -183,16 +182,39 @@ streamlit run app.py
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/chat` | Ask a question and receive an answer with context and sources |
+| `POST` | `/chat` | Ask a question; returns an answer with context and sources |
 | `GET` | `/chat/documents` | List the PDF policy files in the indexed corpus |
+| `GET` | `/chat/documents/{filename}/download` | Download a source policy PDF |
 | `GET` | `/chat/history/{session_id}` | Get persisted session chat history |
 | `DELETE` | `/chat/history/{session_id}` | Clear persisted session chat history |
+| `GET` | `/health` | Liveness check |
+
+## Evaluation
+
+Evaluation is **offline and dev-only** — it never runs on the request path. The
+harness in `backend/eval/` scores the pipeline against a labeled dataset:
+retrieval metrics (`recall@k`, `hit@k`, `mrr`, `context_hit_rate`) with no LLM,
+plus RAGAS answer-quality metrics in an isolated virtualenv. See
+[`backend/eval/README.md`](backend/eval/README.md).
+
+## Project Direction
+
+`app-base` is the starting point. The planned build-out (each step designed and
+built independently) is:
+
+1. **JWT auth + RBAC** — HR can update policies (reindex); employees can chat.
+2. **User preferences** in PostgreSQL, injected into the answer prompt.
+3. **Retrieval-quality inspection** using the offline eval harness.
+4. **React frontend + object-storage policy bucket** (reindexable).
+5. **Serverless on Google Cloud** — migrate off local Chroma-on-disk (e.g. to
+   pgvector) and deploy on Cloud Run.
+6. **Automated reindexing** via an n8n workflow.
 
 ## Notes
 
-- Indexing is offline-only via `python -m backend.index_documents`. Changed
-  files are re-indexed based on a content hash, and a rebuild is also triggered
-  when `CHUNK_VERSION` changes. `start.sh` runs the indexer once if no index
-  exists yet.
-- ChromaDB data and policy documents are ignored by git.
-- This is a local demo app with no auth by design.
+- Indexing is offline-only via `python -m backend.index_documents`. Changed files
+  are re-indexed based on a content hash, and a rebuild is also triggered when
+  `CHUNK_VERSION` changes. `start.sh` runs the indexer once if no index exists yet.
+- ChromaDB data and policy documents are gitignored (`backend/data/`).
+- This base version is local and single-user with no auth yet — auth/RBAC is the
+  next milestone.

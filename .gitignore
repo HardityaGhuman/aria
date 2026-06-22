@@ -48,3 +48,17 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+CLAUDE.md
+
+# Isolated RAGAS evaluation environment
+eval_venv/
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+
+# Node / React frontend (planned)
+node_modules/
+.next/
+*.local
