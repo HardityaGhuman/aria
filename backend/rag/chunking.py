@@ -19,7 +19,7 @@ from backend.rag.loaders import clean_text
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
 # Bump to force a one-time reindex when chunking logic changes.
-CHUNK_VERSION = "2026-06-19-pdf-rag-v5"
+CHUNK_VERSION = "2026-06-23-multisource-md-v6"
 # Sections shorter than this are treated as heading/intro blurbs ("In this
 # section we explain...") and folded forward into the next real section, so they
 # don't survive as low-content chunks that win retrieval slots without payload.
@@ -32,6 +32,14 @@ SECTION_SPLITTER = RecursiveCharacterTextSplitter(
 
 # Structured heading prefixes: Roman numerals (IV.), decimal (1. / 2.3), lettered (A.)
 _HEADING_PREFIX = re.compile(r"^(?:[IVXLCDM]+\.|\d+(?:\.\d+)*\.?|[A-Z]\.)\s+\S")
+# Markdown ATX headings (# .. ###### Title). Markdown docs (the policy corpus)
+# carry no TOC page, so these are the primary section boundaries for them.
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+\S")
+
+
+def _normalize_heading(line: str) -> str:
+    """Strip Markdown ``#`` markers so the parent_section label is clean text."""
+    return line.strip().lstrip("#").strip()
 
 
 def _looks_like_toc(page_text: str) -> bool:
@@ -67,6 +75,8 @@ def _is_heading(line: str, toc_titles: set[str]) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
+    if _MARKDOWN_HEADING.match(stripped):
+        return True
     if stripped.lower() in toc_titles:
         return True
     return bool(_HEADING_PREFIX.match(stripped))
@@ -81,7 +91,7 @@ def _split_into_sections(content: str, toc_titles: set[str]) -> list[tuple[str, 
         if _is_heading(line, toc_titles):
             if buffer:
                 sections.append((heading, "\n".join(buffer).strip()))
-            heading = line.strip()
+            heading = _normalize_heading(line)
             buffer = [line]
         else:
             buffer.append(line)

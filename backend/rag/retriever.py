@@ -47,6 +47,9 @@ def retrieve(query: str, strategy: str = None, n_results: int = None) -> Retriev
         sources.append({
             "source": source,
             "chunk": chunk_number,
+            "department": cand.metadata.get("department") or None,
+            "access_tier": cand.metadata.get("access_tier") or None,
+            "section": cand.metadata.get("parent_section") or None,
             "distance": round(float(cand.distance), 4) if cand.distance is not None else None,
         })
 

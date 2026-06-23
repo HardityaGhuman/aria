@@ -68,6 +68,32 @@ def fetch_document_bytes(filename: str) -> bytes:
     return resp.content
 
 
+def render_retrieval(sources, context):
+    """Show exactly what was retrieved: per-chunk source path, department,
+    access tier, section, and the exact context block sent to the model."""
+    if not sources:
+        return
+    # One-line summary of the distinct documents behind the answer.
+    st.caption("Sources: " + ", ".join(sorted({s["source"] for s in sources})))
+    with st.expander(f"Retrieved {len(sources)} passage(s) — inspect"):
+        for s in sources:
+            dept = s.get("department") or "—"
+            tier = s.get("access_tier") or "—"
+            section = s.get("section")
+            distance = s.get("distance")
+            dist_str = f"  ·  dist `{distance}`" if distance is not None else ""
+            st.markdown(
+                f"**{s.get('source')}**  ·  dept `{dept}`  ·  tier `{tier}`"
+                f"  ·  chunk `{s.get('chunk')}`{dist_str}"
+            )
+            if section:
+                st.caption(f"§ {section}")
+        if context:
+            st.markdown("---")
+            st.caption("Exact context sent to the model:")
+            st.code(context, language="markdown")
+
+
 def call_chat(message: str):
     """Return (reply, context, sources). Errors become a friendly reply."""
     try:
@@ -107,18 +133,21 @@ with st.sidebar:
             documents = []
 
         if documents:
+            _mime = {"pdf": "application/pdf", "md": "text/markdown", "txt": "text/plain"}
             for document in documents:
-                name = document["filename"]
+                rel_path = document["filename"]                  # e.g. hr/employment-basics.md
+                label = os.path.basename(rel_path)
+                dept = document.get("department")
                 try:
                     st.download_button(
-                        name,
-                        data=fetch_document_bytes(name),
-                        file_name=name,
-                        mime="application/pdf",
+                        f"{label}" + (f"  ·  {dept}" if dept else ""),
+                        data=fetch_document_bytes(rel_path),
+                        file_name=label,
+                        mime=_mime.get(document.get("type", ""), "application/octet-stream"),
                         use_container_width=True,
                     )
                 except Exception:
-                    st.caption(name)
+                    st.caption(rel_path)
         else:
             st.caption("No policy documents are indexed yet.")
 
@@ -151,9 +180,8 @@ if not st.session_state.messages and not prompt:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        srcs = msg.get("sources") or []
-        if msg["role"] == "assistant" and srcs:
-            st.caption("Sources: " + ", ".join(sorted({s["source"] for s in srcs})))
+        if msg["role"] == "assistant":
+            render_retrieval(msg.get("sources") or [], msg.get("context", ""))
 
 # Handle the new turn at the bottom, so the spinner appears below the
 # conversation rather than at the top of the page.
@@ -163,12 +191,11 @@ if prompt:
 
     with st.chat_message("assistant"):
         with st.spinner("Aria is thinking…"):
-            reply, _context, sources = call_chat(prompt)
+            reply, context, sources = call_chat(prompt)
         st.markdown(reply)
-        if sources:
-            st.caption("Sources: " + ", ".join(sorted({s["source"] for s in sources})))
+        render_retrieval(sources, context)
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append(
-        {"role": "assistant", "content": reply, "sources": sources}
+        {"role": "assistant", "content": reply, "sources": sources, "context": context}
     )

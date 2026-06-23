@@ -24,9 +24,11 @@ env/
 # Streamlit and local app state
 .streamlit/secrets.toml
 
-# Generated RAG data and uploaded policy files
-data/
-backend/data/
+# Generated RAG data: vector store (rebuildable) + archived reference docs.
+# The curated policy corpus under backend/data/docs/ IS tracked on purpose.
+data/chroma_db/
+backend/data/chroma_db/
+backend/data/docs_archive/
 *.sqlite
 *.sqlite3
 *.db
@@ -49,6 +51,7 @@ Thumbs.db
 *.swp
 *.swo
 CLAUDE.md
+docs/superpowers
 
 # Isolated RAGAS evaluation environment
 eval_venv/
