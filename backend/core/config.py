@@ -21,6 +21,24 @@ BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "10"))
 RETRIEVAL_STRATEGY = os.getenv("RETRIEVAL_STRATEGY", "hybrid")
 # Rewrite the user's query (history-aware) before retrieval to resolve follow-ups.
 QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
+
+# --- Auth / JWT ---
+# JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
+# so tests and tooling can import config without a secret present. The server
+# refuses to boot without it; signing tokens with a default key would be insecure.
+JWT_SECRET = os.getenv("JWT_SECRET")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
+
+
+def require_jwt_secret() -> str:
+    """Return JWT_SECRET or raise if unset. Called at startup and before signing."""
+    if not JWT_SECRET:
+        raise RuntimeError(
+            "JWT_SECRET is not set. Refusing to issue or verify tokens with a "
+            "default key. Set JWT_SECRET in backend/.env to a long random string."
+        )
+    return JWT_SECRET
 # Base directory is "backend/"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")

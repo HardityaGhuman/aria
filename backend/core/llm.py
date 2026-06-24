@@ -64,37 +64,32 @@ def classify_query(user_message: str, history: list[dict]) -> str:
         for msg in history[-6:]
         if msg.get("content")
     ) or "No prior conversation."
-    classification_prompt = f"""Classify the user's latest query for a company policy assistant.
+    classification_prompt = f"""### 1. Task
+Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, meta, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
 
-Return exactly one label and nothing else: policy, meta, or out_of_scope.
-
-Decide what the query is ABOUT, not what topic it mentions:
+### 2. Labels
+- policy: the query needs the SUBSTANCE of a company rule, benefit, entitlement, procedure, handbook topic, or operational practice to answer, OR it asks for guidance on how to handle, report, or resolve a real workplace situation the company's policies govern — incidents, losses, errors, access problems, eligibility, requests, or entitlements. This holds regardless of grammatical person or phrasing: "what is the policy on X", "what do I do if Y happens", "how / who do I report Z to", and conversational, first-person, or situational wordings all count. It also includes asking to summarize or explain a policy topic, and follow-ups that ask for MORE policy detail even when they reference the prior turn. When in doubt between policy and out_of_scope, choose policy — retrieval can still decline if nothing relevant is found.
 - meta: the query is about THIS CONVERSATION itself — the messages exchanged, what the user asked, what the assistant previously said, or a recap/count of the chat. The answer comes from the conversation transcript, not from policy documents. Signals: "I/you/we" referring to earlier turns, "this conversation/chat", "so far", "earlier", "last/previous question or answer", "what did you say", "repeat that", "how many questions", "recap/summarize our discussion".
-- policy: the query asks for the SUBSTANCE of a company rule, benefit, procedure, entitlement, handbook topic, or operational policy. The answer comes from policy documents. This includes asking to summarize or explain a policy topic ("summarize the leave policy"), and follow-ups that ask for MORE policy detail ("tell me more about that", "what about sick leave") even though they reference the prior turn — those still need document content.
-- out_of_scope: general knowledge, code, unrelated tasks, or any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy.
+- out_of_scope: general knowledge, code, or tasks with no connection to the company, OR any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy. A genuine question about handling or reporting a workplace situation is NOT out_of_scope simply because it is phrased personally or asks "what do I do" — that is policy.
 
-Disambiguation rules:
-- "summarize the <topic> policy" / "explain <topic>" -> policy (about document substance).
-- "summarize/recap what WE discussed" or "what have I asked" -> meta (about the conversation).
+### 3. Disambiguation
+- A request for the rule, entitlement, or the procedure to handle/report a workplace situation -> policy, no matter how conversational or first-person the wording.
+- "summarize the <topic> policy" / "explain <topic>" -> policy (document substance).
+- "summarize/recap what WE discussed" or "what have I asked" -> meta (the conversation).
 - A follow-up that needs new policy facts -> policy, even if it says "you mentioned" or "earlier".
-- A follow-up answerable purely from prior messages (e.g. "what was my first question", "repeat your last answer") -> meta.
-- When a query mixes both, prefer meta only if it can be fully answered from the transcript without consulting documents.
+- A follow-up answerable purely from prior messages ("what was my first question", "repeat your last answer") -> meta.
+- A request to produce a written deliverable on a policy topic -> out_of_scope (it asks to create, not to look up).
+- When a query mixes both policy and meta, prefer meta only if it can be fully answered from the transcript without consulting documents.
 
-Examples:
-- "what benefits do employees get" -> policy
-- "summarize the benefits policy" -> policy
-- "tell me more about that" (after a policy answer) -> policy
-- "what about parental leave?" -> policy
-- "summarize what we discussed so far" -> meta
-- "what was the first question I asked" -> meta
-- "what did you just tell me about PTO" -> meta
-- "how many questions have I asked" -> meta
-- "can you repeat your previous answer" -> meta
-- "list everything I've asked in order" -> meta
-- "write me a report on employee benefits" -> out_of_scope
-- "write an email explaining the leave policy" -> out_of_scope
-- "what is the capital of France" -> out_of_scope
+### 4. Examples (by category, not exhaustive)
+- A question about an entitlement, benefit, rule, or eligibility -> policy
+- A question asking how to report or respond to a workplace incident, loss, error, or access problem -> policy
+- A follow-up asking for more detail on a policy topic already discussed -> policy
+- A question about what was said or asked earlier in this chat, or a recap/count of it -> meta
+- A request to write, draft, or generate any document, email, or message -> out_of_scope
+- A general-knowledge or unrelated question with no company-policy answer -> out_of_scope
 
+### 5. Input
 Recent conversation:
 {history_excerpt}
 
@@ -120,10 +115,21 @@ Latest query:
 
 def get_meta_response(user_message: str, history: list[dict]) -> str:
     """Answer conversation-history questions without retrieved policy context."""
-    prompt = f"""The user is asking about this conversation, not about company policy documents.
+    prompt = f"""### 1. Persona
+You are Aria, an internal company policy assistant, replying to a question about the current chat itself rather than about policy documents.
 
-Answer using only the conversation history provided in the messages. Do not cite policy documents, do not mention retrieved context, and do not add a "Not found in the provided documents" section.
+### 2. Task
+Answer the user's question using only the conversation history provided in the messages.
 
+### 3. Constraints
+- Use only the conversation transcript; do not consult, infer, or cite policy documents.
+- Do not mention retrieved context, excerpts, or any implementation detail.
+- Do not add a "Not found in the provided documents" section.
+
+### 4. Format
+Respond in concise Markdown: one direct sentence, with short bullets only if they add distinct detail.
+
+### 5. Input
 User question:
 {user_message}"""
     messages = _build_messages(
@@ -189,15 +195,26 @@ def summarize_history(messages_to_summarize: list[dict], previous_summary: str |
         role = "Employee" if msg["role"] == "user" else "Assistant"
         new_messages_str += f"{role}: {msg['content']}\n\n"
         
-    summary_prompt = f"""You are a helpful company assistant. Write a concise, single-paragraph summary of the conversation history so far.
+    summary_prompt = f"""### 1. Persona
+You summarize conversations for an internal company policy assistant.
 
+### 2. Task
+Write a concise, single-paragraph summary of the conversation so far, folding any previous summary into the new exchange.
+
+### 3. Constraints
+- Capture the questions asked and the substantive information given; drop greetings and filler.
+- No JSON, no prefixes like "Summary:", no formatting tags, no meta commentary.
+- Keep it under 150 words.
+
+### 4. Format
+A single clear, direct paragraph.
+
+### 5. Input
 Previous conversation summary:
 {previous_summary or 'None'}
 
 New exchange to incorporate:
-{new_messages_str}
-
-Respond with a clear, direct, paragraph-style summary. Do not include any JSON, prefixes like "Summary:", formatting tags, or meta commentary. Keep it under 150 words."""
+{new_messages_str}"""
 
     try:
         messages = _build_messages(
