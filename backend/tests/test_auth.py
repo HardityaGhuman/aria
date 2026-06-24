@@ -44,22 +44,7 @@ def test_decode_rejects_garbage():
         auth.decode_token("not-a-jwt")
 
 
-# --- RBAC: role -> visible access tiers ---
-
-def test_hr_sees_all_tiers():
-    assert set(auth.tiers_for_role("hr")) == {"all", "manager", "hr_only"}
-
-
-def test_employee_sees_only_all():
-    assert auth.tiers_for_role("employee") == ["all"]
-
-
-def test_unknown_or_missing_role_defaults_to_all_only():
-    assert auth.tiers_for_role("whatever") == ["all"]
-    assert auth.tiers_for_role(None) == ["all"]
-
-
-# --- manager tier ---
+# --- RBAC: role -> visible access tiers (3 tiers: all | manager | hr_only) ---
 
 def test_employee_sees_only_all_tier():
     assert auth.tiers_for_role("employee") == ["all"]

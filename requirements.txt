@@ -19,7 +19,9 @@ langchain-text-splitters>=0.3.0
 bcrypt>=4.1.0
 PyJWT>=2.8.0
 
+# Tabular corpus ingestion (.xlsx loader)
 openpyxl>=3.1.0
+# Dev/scripts only: generate_benefits_pdf.py (committed PDF needs no runtime reportlab)
 reportlab>=4.0.0
 
 # Test
