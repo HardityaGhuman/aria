@@ -149,6 +149,19 @@ def chunk_documents(pages: list[Document]) -> list[Document]:
     if not pages:
         return []
 
+    # Tabular sources are pre-chunked one-row-per-Document by the loader; the
+    # structure-aware path (TOC/heading splitting, tiny-section merge) would
+    # corrupt them, so pass them through verbatim as reference_table chunks.
+    if pages[0].metadata.get("is_tabular"):
+        return [
+            Document(
+                page_content=p.page_content,
+                metadata={"content_type": "reference_table", "parent_section": ""},
+            )
+            for p in pages
+            if p.page_content.strip()
+        ]
+
     toc_pages = [p.page_content for p in pages if _looks_like_toc(p.page_content)]
     content_pages = [p.page_content for p in pages if not _looks_like_toc(p.page_content)]
 

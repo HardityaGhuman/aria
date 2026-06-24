@@ -7,6 +7,7 @@ declares the document's ``department`` and ``access_tier``; this module parses
 that block, strips it from the body, and stamps the resolved values onto every
 returned ``Document`` so the indexer can persist them as Chroma metadata.
 """
+import csv
 import hashlib
 import os
 import re
@@ -14,7 +15,7 @@ import re
 # pyrefly: ignore [missing-import]
 from langchain_core.documents import Document
 
-SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt"}
+SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt", ".csv", ".xlsx"}
 
 # Default tier for any document that does not declare one. "all" means every
 # authenticated user may retrieve it; the only other tier today is "hr_only".
@@ -113,6 +114,52 @@ def _load_text_like(filepath: str) -> tuple[list[Document], dict]:
     return [Document(page_content=body, metadata={"source": filename})], frontmatter
 
 
+def _read_sidecar(filepath: str) -> dict:
+    """Read a companion ``<name>.meta.yaml`` flat key:value sidecar for tabular
+    files (which cannot carry inline frontmatter). Reuses the frontmatter parser
+    by wrapping the sidecar body in ``---`` fences. Missing sidecar -> {}."""
+    sidecar = filepath + ".meta.yaml"
+    if not os.path.exists(sidecar):
+        return {}
+    with open(sidecar, encoding="utf-8") as f:
+        meta, _ = _parse_frontmatter("---\n" + f.read().strip() + "\n---\n")
+    return meta
+
+
+def _rows_to_documents(filename: str, header: list[str], rows: list[list[str]]) -> list[Document]:
+    """Serialize each data row to a labeled key:value block — one Document per row
+    so a row's fields never split across chunks (the rows-as-chunks contract)."""
+    documents = []
+    for row in rows:
+        cells = list(row) + [""] * (len(header) - len(row))
+        label_parts = [filename] + [str(cells[i]) for i in range(min(2, len(header))) if str(cells[i]).strip()]
+        label = "[Table: " + " | ".join(label_parts) + "]"
+        body = "\n".join(f"{col}: {cells[i]}" for i, col in enumerate(header) if str(cells[i]).strip())
+        documents.append(Document(page_content=f"{label}\n{body}", metadata={"source": filename}))
+    return documents
+
+
+def _load_csv_file(filepath: str) -> tuple[list[Document], dict]:
+    filename = os.path.basename(filepath)
+    with open(filepath, newline="", encoding="utf-8") as f:
+        reader = list(csv.reader(f))
+    if len(reader) < 2:
+        return [], _read_sidecar(filepath)
+    header, rows = reader[0], reader[1:]
+    return _rows_to_documents(filename, header, rows), _read_sidecar(filepath)
+
+
+def _load_xlsx_file(filepath: str) -> tuple[list[Document], dict]:
+    from openpyxl import load_workbook
+
+    filename = os.path.basename(filepath)
+    sheet = load_workbook(filepath, read_only=True, data_only=True).active
+    grid = [[("" if c is None else str(c)) for c in r] for r in sheet.iter_rows(values_only=True)]
+    if len(grid) < 2:
+        return [], _read_sidecar(filepath)
+    return _rows_to_documents(filename, grid[0], grid[1:]), _read_sidecar(filepath)
+
+
 def load_document(filepath: str, department_fallback: str = "") -> list[Document]:
     """Load a file into ``Document`` objects, stamped with department + tier.
 
@@ -125,6 +172,10 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
         docs, frontmatter = _load_pdf_file(filepath)
     elif extension in {".md", ".txt"}:
         docs, frontmatter = _load_text_like(filepath)
+    elif extension == ".csv":
+        docs, frontmatter = _load_csv_file(filepath)
+    elif extension == ".xlsx":
+        docs, frontmatter = _load_xlsx_file(filepath)
     else:
         return []
 
@@ -141,4 +192,10 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
         doc.metadata["doc_type"] = doc_type
         doc.metadata["version"] = version
         doc.metadata["effective_date"] = effective_date
+
+    if extension in {".csv", ".xlsx"}:
+        for doc in docs:
+            doc.metadata["is_tabular"] = True
+            doc.metadata["content_type"] = "reference_table"
+
     return docs
