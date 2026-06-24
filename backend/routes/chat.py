@@ -8,10 +8,11 @@ shape responses.
 import os
 
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.responses import FileResponse
 
+from backend.core.auth import get_current_user
 from backend.core.chat_memory import (
     ChatMemoryError,
     clear_history as clear_session_history,
@@ -22,7 +23,9 @@ from backend.models import ChatRequest, ChatResponse
 from backend.rag import list_policy_documents
 from backend.services.chat_service import generate_chat_reply
 
-router = APIRouter()
+# Every chat route requires an authenticated user (any role). The gate is at the
+# router level so no endpoint can be added unsecured by accident.
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=ChatResponse)

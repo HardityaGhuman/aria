@@ -51,19 +51,81 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []  # {"role", "content", "sources"}
+if "token" not in st.session_state:
+    st.session_state.token = None
+    st.session_state.role = None
+    st.session_state.email = None
+
+
+# ── Auth helpers ─────────────────────────────────────────────────────
+def auth_headers() -> dict:
+    token = st.session_state.token
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def logout(message: str | None = None):
+    """Clear the session and bounce back to the login screen."""
+    st.session_state.token = None
+    st.session_state.role = None
+    st.session_state.email = None
+    st.session_state.messages = []
+    if message:
+        st.session_state.auth_notice = message
+    st.rerun()
+
+
+def render_login():
+    """Login screen. Shown until a token is stored. Stops the rest of the app."""
+    st.title("Aria — Policy Assistant")
+    st.caption("Sign in to ask about company policies.")
+    if notice := st.session_state.pop("auth_notice", None):
+        st.warning(notice)
+    with st.form("login"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in", use_container_width=True)
+    if submitted:
+        try:
+            resp = requests.post(
+                f"{API_BASE_URL}/auth/login",
+                json={"email": email, "password": password},
+                timeout=15,
+            )
+        except requests.exceptions.ConnectionError:
+            st.error("Cannot reach the server. Is the backend running?")
+            st.stop()
+        if resp.status_code == 200:
+            data = resp.json()
+            st.session_state.token = data["access_token"]
+            st.session_state.role = data["role"]
+            st.session_state.email = email
+            st.rerun()
+        elif resp.status_code == 401:
+            st.error("Invalid email or password.")
+        elif resp.status_code == 503:
+            st.error("The server is unavailable right now. Try again shortly.")
+        else:
+            st.error("Login failed. Try again.")
+    st.stop()
 
 
 # ── Backend helpers ──────────────────────────────────────────────────
 @st.cache_data(ttl=30)
-def fetch_policy_documents():
-    resp = requests.get(f"{CHAT_ENDPOINT}/documents", timeout=5)
+def fetch_policy_documents(token: str):
+    resp = requests.get(
+        f"{CHAT_ENDPOINT}/documents", headers={"Authorization": f"Bearer {token}"}, timeout=5
+    )
     resp.raise_for_status()
     return resp.json().get("documents", [])
 
 
 @st.cache_data(ttl=300)
-def fetch_document_bytes(filename: str) -> bytes:
-    resp = requests.get(f"{CHAT_ENDPOINT}/documents/{filename}/download", timeout=15)
+def fetch_document_bytes(filename: str, token: str) -> bytes:
+    resp = requests.get(
+        f"{CHAT_ENDPOINT}/documents/{filename}/download",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
     resp.raise_for_status()
     return resp.content
 
@@ -95,40 +157,58 @@ def render_retrieval(sources, context):
 
 
 def call_chat(message: str):
-    """Return (reply, context, sources). Errors become a friendly reply."""
+    """Return (reply, context, sources). Errors become a friendly reply.
+
+    A 401 means the token expired or is invalid → log the user out so they can
+    sign in again rather than seeing a raw error.
+    """
     try:
         resp = requests.post(
             CHAT_ENDPOINT,
             json={"session_id": st.session_state.session_id, "message": message},
+            headers=auth_headers(),
             timeout=90,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["reply"], data.get("context_used", ""), data.get("sources", [])
     except requests.exceptions.ConnectionError:
         return "Cannot reach the assistant. Is the backend running?", "", []
-    except requests.exceptions.HTTPError as e:
-        try:
-            detail = e.response.json().get("detail", str(e))
-        except Exception:
-            detail = str(e)
-        return f"Backend error: {detail}", "", []
     except Exception as e:
         return f"Something went wrong: {e}", "", []
+
+    if resp.status_code == 401:
+        logout("Your session expired. Please sign in again.")
+    if resp.status_code == 503:
+        return "The server is temporarily unavailable. Try again shortly.", "", []
+    if not resp.ok:
+        try:
+            detail = resp.json().get("detail", resp.reason)
+        except Exception:
+            detail = resp.reason
+        return f"Backend error: {detail}", "", []
+
+    data = resp.json()
+    return data["reply"], data.get("context_used", ""), data.get("sources", [])
+
+
+# ── Auth gate ────────────────────────────────────────────────────────
+# Everything below requires a logged-in user. render_login() calls st.stop()
+# when there is no token, so the chat UI never renders for an anonymous user.
+if not st.session_state.token:
+    render_login()
 
 
 # ── Sidebar: minimal ─────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Policy Library")
+    st.caption(f"Signed in as **{st.session_state.email}** · `{st.session_state.role}`")
 
     if DOC_DRIVE_URL:
         # Hosted documents: one link to the shared drive, independent of the
         # backend so it always shows even before the index is built.
         st.link_button("Open policy documents", DOC_DRIVE_URL, use_container_width=True)
     else:
-        # Local mode: list indexed PDFs with download buttons from the backend.
+        # Local mode: list indexed docs with download buttons from the backend.
         try:
-            documents = fetch_policy_documents()
+            documents = fetch_policy_documents(st.session_state.token)
         except Exception:
             documents = []
 
@@ -141,7 +221,7 @@ with st.sidebar:
                 try:
                     st.download_button(
                         f"{label}" + (f"  ·  {dept}" if dept else ""),
-                        data=fetch_document_bytes(rel_path),
+                        data=fetch_document_bytes(rel_path, st.session_state.token),
                         file_name=label,
                         mime=_mime.get(document.get("type", ""), "application/octet-stream"),
                         use_container_width=True,
@@ -151,11 +231,40 @@ with st.sidebar:
         else:
             st.caption("No policy documents are indexed yet.")
 
+    # HR-only: trigger a reindex of the policy corpus.
+    if st.session_state.role == "hr":
+        st.divider()
+        if st.button("Update policies (reindex)", use_container_width=True):
+            with st.spinner("Reindexing…"):
+                try:
+                    resp = requests.post(
+                        f"{API_BASE_URL}/admin/reindex", headers=auth_headers(), timeout=300
+                    )
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot reach the server.")
+                    resp = None
+            if resp is not None:
+                if resp.status_code == 401:
+                    logout("Your session expired. Please sign in again.")
+                elif resp.status_code == 403:
+                    st.error("You don't have access to that.")
+                elif resp.ok:
+                    s = resp.json()
+                    st.success(
+                        f"Reindexed: {s.get('indexed', 0)} added, "
+                        f"{s.get('skipped', 0)} skipped, {s.get('deleted', 0)} removed."
+                    )
+                    fetch_policy_documents.clear()
+                else:
+                    st.error("Reindex failed. Check server logs.")
+
     st.divider()
     if st.button("Clear conversation", use_container_width=True):
         try:
             requests.delete(
-                f"{CHAT_ENDPOINT}/history/{st.session_state.session_id}", timeout=5
+                f"{CHAT_ENDPOINT}/history/{st.session_state.session_id}",
+                headers=auth_headers(),
+                timeout=5,
             )
         except Exception:
             pass
@@ -163,13 +272,16 @@ with st.sidebar:
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
 
+    if st.button("Log out", use_container_width=True):
+        logout()
+
 
 # ── Header ───────────────────────────────────────────────────────────
 st.title("Aria — Policy Assistant")
 st.caption("Grounded answers from your company policy documents.")
 
 # chat_input is declared at the top level so it stays pinned to the bottom of
-# the page; the new turn itself is rendered inside the Chat tab below.
+# the page; the new turn itself isq rendered inside the Chat tab below.
 prompt = st.chat_input("Ask about a company policy…")
 
 # ── Chat ─────────────────────────────────────────────────────────────

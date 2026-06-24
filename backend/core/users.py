@@ -1,0 +1,93 @@
+"""
+core/users.py
+-------------
+PostgreSQL access for the ``users`` table: the identity store behind auth and
+RBAC. Mirrors ``core/chat_memory.py`` (a ``_connect`` helper, an idempotent
+``initialize_*`` function, a typed error, parameterized SQL only).
+
+Note on the memory split: this table holds long-term identity and lives in
+Postgres for good. Short-term chat sessions/messages are destined for a Redis
+cache later, so they stay separate from this module.
+"""
+from dataclasses import dataclass
+
+# pyrefly: ignore [missing-import]
+import psycopg
+# pyrefly: ignore [missing-import]
+from psycopg.rows import dict_row
+
+from backend.core.config import DATABASE_URL
+
+
+@dataclass
+class UserError(Exception):
+    message: str
+
+
+def _connect():
+    try:
+        return psycopg.connect(DATABASE_URL)
+    except Exception as exc:
+        raise UserError(
+            "Could not connect to PostgreSQL for users. "
+            "Make sure DATABASE_URL points to a running PostgreSQL database."
+        ) from exc
+
+
+def initialize_users_table() -> None:
+    """Create the ``users`` table if it does not exist. Idempotent."""
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('hr', 'employee')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+
+
+def create_user(email: str, password_hash: str, role: str) -> dict:
+    """Insert a user. Returns the created row. Raises on duplicate email."""
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO users (email, password_hash, role)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, email, role, created_at
+                    """,
+                    (email, password_hash, role),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                raise UserError(f"A user with email {email!r} already exists.") from exc
+            return dict(cursor.fetchone())
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """Return the full user row (incl. password_hash) or None."""
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                "SELECT id, email, password_hash, role, created_at FROM users WHERE email = %s",
+                (email,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    """Return the user row (no password_hash) or None."""
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                "SELECT id, email, role, created_at FROM users WHERE id = %s",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None

@@ -9,7 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.routes.chat import router as chat_router
+from backend.routes.auth import router as auth_router
+from backend.routes.admin import router as admin_router
 from backend.core.chat_memory import initialize_chat_memory
+from backend.core.config import require_jwt_secret
+from backend.core.users import initialize_users_table
 from backend.core.logging import get_logger, setup_logging
 from backend.rag import get_collection
 
@@ -37,9 +41,13 @@ async def startup_event():
     Documents are indexed offline (see backend/index_documents.py); the server
     only reads the existing index and never ingests PDFs at runtime.
     """
-    logger.info("Initializing chat memory...")
+    # Refuse to boot without a JWT secret — never sign tokens with a default key.
+    require_jwt_secret()
+
+    logger.info("Initializing chat memory and users table...")
     initialize_chat_memory()
-    logger.info("Chat memory ready.")
+    initialize_users_table()
+    logger.info("Chat memory and users table ready.")
 
     chunk_count = get_collection().count()
     if chunk_count == 0:
@@ -50,6 +58,8 @@ async def startup_event():
     else:
         logger.info("Vector store ready (%d chunks).", chunk_count)
 
+app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(chat_router, prefix="/chat", tags=["Chat"])
 
 @app.get("/health")
