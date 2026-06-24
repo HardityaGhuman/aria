@@ -6,7 +6,7 @@ title: Compensation and Payroll
 
 # Compensation and Payroll
 
-This document explains how compensation works at Northwind Labs: exempt versus non-exempt status, overtime, the payroll schedule and payslips, pay bands and reviews, bonuses, and the basics of payroll deductions. It applies to all employees. For reimbursement of business costs, see the finance expenses and reimbursement policy.
+This document explains how compensation works at GSVH Corp: exempt versus non-exempt status, overtime, the payroll schedule and payslips, pay bands and reviews, bonuses, and the basics of payroll deductions. It applies to all employees. For reimbursement of business costs, see the finance expenses and reimbursement policy.
 
 ## 1. Compensation Status: Exempt and Non-Exempt
 

@@ -23,10 +23,10 @@ from backend.core.users import (
 
 # (email, role, env var holding the password)
 SEED_USERS = [
-    ("hr@northwind.test", "hr", "SEED_HR_PASSWORD"),
+    ("hr@gsvh.test", "hr", "SEED_HR_PASSWORD"),
     ("manager@gsvh.test", "manager", "SEED_MANAGER_PASSWORD"),
-    ("employee@northwind.test", "employee", "SEED_EMPLOYEE_PASSWORD"),
-    ("employee2@northwind.test", "employee", "SEED_EMPLOYEE2_PASSWORD"),
+    ("employee@gsvh.test", "employee", "SEED_EMPLOYEE_PASSWORD"),
+    ("employee2@gsvh.test", "employee", "SEED_EMPLOYEE2_PASSWORD"),
 ]
 
 

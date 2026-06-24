@@ -6,7 +6,7 @@ title: Health and Wellbeing
 
 # Health and Wellbeing
 
-This document describes the health and wellbeing benefits at Northwind Labs: health insurance, workers' compensation, the employee assistance program, wellness initiatives, and retirement contributions. It applies to all employees, with eligibility for some benefits depending on contract type and scheduled hours. Time away for illness is covered in the leave policies document.
+This document describes the health and wellbeing benefits at GSVH Corp: health insurance, workers' compensation, the employee assistance program, wellness initiatives, and retirement contributions. It applies to all employees, with eligibility for some benefits depending on contract type and scheduled hours. Time away for illness is covered in the leave policies document.
 
 ## 1. Health Insurance
 

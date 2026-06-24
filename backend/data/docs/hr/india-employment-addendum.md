@@ -26,7 +26,7 @@ For employees covered by the Shops and Establishments Act of the relevant state,
 
 The **notice period for India-based employees is 60 calendar days**, on both the employee's side and GSVH India Pvt Ltd's side, regardless of seniority level. This supersedes the global policy notice period for India employees. Notice must be given in writing. During the notice period, the employee continues to work and receive full pay unless a payment in lieu of notice (PILON) is agreed in writing.
 
-Employees in their 90-day probation period serve a shorter notice of 2 weeks on either side, as stated in the employment contract.
+Employees in their 90-day probation period serve a shorter notice of 2 weeks on either side, as stated in the employment contract. This 2-week probation notice supersedes the global one-week probation notice (`hr/employment-basics.md`, `hr/new-joiner-onboarding.md`) for GSVH India Pvt Ltd entity employees.
 
 ## 4. Employees' Provident Fund (EPF)
 

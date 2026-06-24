@@ -6,7 +6,7 @@ title: Expenses and Reimbursement
 
 # Expenses and Reimbursement
 
-This document explains how to claim business expenses at Northwind Labs: what is reimbursable, the approval limits, travel and meals, the company car program, parking, and tuition and relocation reimbursement. It applies to all employees who incur costs on the company's behalf. Compensation and payroll are covered in a separate finance document.
+This document explains how to claim business expenses at GSVH Corp: what is reimbursable, the approval limits, travel and meals, the company car program, parking, and tuition and relocation reimbursement. It applies to all employees who incur costs on the company's behalf. Compensation and payroll are covered in a separate finance document.
 
 ## 1. General Principles
 

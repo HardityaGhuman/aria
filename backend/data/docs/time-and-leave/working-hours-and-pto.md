@@ -6,7 +6,7 @@ title: Working Hours and Paid Time Off
 
 # Working Hours and Paid Time Off
 
-This document explains working hours, attendance recording, paid time off (PTO) accrual and booking, and public holidays at Northwind Labs. It applies to all employees. Sick leave, bereavement, parental leave, and other specific leave types are covered in the separate leave policies document.
+This document explains working hours, attendance recording, paid time off (PTO) accrual and booking, and public holidays at GSVH Corp. It applies to all employees. Sick leave, bereavement, parental leave, and other specific leave types are covered in the separate leave policies document.
 
 ## 1. Working Hours
 

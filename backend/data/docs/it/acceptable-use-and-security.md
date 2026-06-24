@@ -6,7 +6,7 @@ title: Acceptable Use and Cyber Security
 
 # Acceptable Use and Cyber Security
 
-This document sets out how to use the company's digital systems safely and responsibly at Northwind Labs: internet and email use, cell phones, social media, passwords and multi-factor authentication, data protection and confidentiality, and how to report a security incident. It applies to everyone who uses company systems or handles company data. Hardware and devices are covered in the IT equipment and devices policy.
+This document sets out how to use the company's digital systems safely and responsibly at GSVH Corp: internet and email use, cell phones, social media, passwords and multi-factor authentication, data protection and confidentiality, and how to report a security incident. It applies to everyone who uses company systems or handles company data. Hardware and devices are covered in the IT equipment and devices policy.
 
 ## 1. Acceptable Use Principles
 
