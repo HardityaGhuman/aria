@@ -115,6 +115,10 @@ def initialize_vectorstore() -> dict:
         # loaded pages (chunking produces fresh Documents that don't carry them).
         department = pages[0].metadata.get("department", department_fallback)
         access_tier = pages[0].metadata.get("access_tier", DEFAULT_ACCESS_TIER)
+        region = pages[0].metadata.get("region", "global")
+        doc_type = pages[0].metadata.get("doc_type", "policy")
+        version = pages[0].metadata.get("version", "2026.1")
+        effective_date = pages[0].metadata.get("effective_date", "2026-01-01")
 
         safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", rel_path)
         chunk_ids = [f"{safe_name}:{source_hash[:12]}:{i}" for i in range(len(chunk_docs))]
@@ -131,6 +135,10 @@ def initialize_vectorstore() -> dict:
                 "parent_section": doc.metadata.get("parent_section", ""),
                 "department": department,
                 "access_tier": access_tier,
+                "region": region,
+                "doc_type": doc_type,
+                "version": version,
+                "effective_date": effective_date,
             }
             for i, doc in enumerate(chunk_docs)
         ]
