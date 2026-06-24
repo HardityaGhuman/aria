@@ -54,7 +54,7 @@ Repeated unexplained absence is treated as a performance and conduct issue and i
 
 ## 7. Probation Period
 
-New hires serve a probation period of 90 calendar days from their start date. During probation, both the employee and the company can end the relationship with a shorter notice period — one week rather than the standard notice — as the role is still being evaluated on both sides.
+New hires serve a probation period of 90 calendar days from their start date. During probation, both the employee and the company can end the relationship with a shorter notice period (notice period) — one week rather than the standard notice — as the role is still being evaluated on both sides.
 
 Managers should hold a structured check-in at the 30-day and 60-day marks and a formal review before the probation period ends. A probation period may be extended once, by up to 30 days, where more time is genuinely needed to assess fit; the extension and its reasons must be documented and shared with the employee. Successful completion of probation is confirmed in writing and does not change the employee's contract type.
 

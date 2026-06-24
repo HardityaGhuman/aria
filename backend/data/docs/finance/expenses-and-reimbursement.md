@@ -12,7 +12,7 @@ This document explains how to claim business expenses at Northwind Labs: what is
 
 The company reimburses reasonable, necessary expenses you incur while doing your job. An expense is reimbursable when it is business-related, supported by a receipt, and within policy. When in doubt, ask before you spend. Personal expenses, fines, and costs without a receipt are not reimbursable.
 
-Submit expense claims through the expense portal within 30 days of incurring the cost. Attach an itemized receipt for every line. Claims submitted more than 60 days late may be refused. Reimbursements are paid with the next payroll run after approval.
+Submit expense claims using form **FIN-EXP-014** through the expense portal within 30 days of incurring the cost. Attach an itemized receipt for every line. Claims submitted more than 60 days late may be refused. Reimbursements are paid with the next payroll run after approval.
 
 ## 2. Approval Limits
 

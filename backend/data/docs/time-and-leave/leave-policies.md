@@ -6,7 +6,9 @@ title: Leave Policies
 
 # Leave Policies
 
-This document covers the specific leave types at Northwind Labs beyond ordinary vacation: sick leave, long-term illness, bereavement leave, jury duty and voting leave, and parental, maternity, and paternity leave. It applies to all employees. Ordinary paid time off and public holidays are covered in the working hours and PTO document.
+> **Version note:** This is the current policy (2026.1, effective 2026-01-01). Supersedes the 2025 leave policy (§ accrual) — see `time-and-leave/leave-policies-2025.md` for the prior version. The key change: base PTO accrual increased from 18 days (2025) to 20 days (2026).
+
+This document covers the specific leave types at GSVH Corp beyond ordinary vacation: sick leave, long-term illness, bereavement leave, jury duty and voting leave, and parental, maternity, and paternity leave. It applies to all employees. Ordinary paid time off and public holidays are covered in the working hours and PTO document.
 
 ## 1. Sick Leave
 
