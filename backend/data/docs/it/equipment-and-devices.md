@@ -6,7 +6,7 @@ title: Company Equipment and Devices
 
 # Company Equipment and Devices
 
-This document covers the hardware side of IT at Northwind Labs: company-issued equipment, bring-your-own-device (BYOD), software installation, VPN and remote access, and returning equipment when you change roles or leave. It applies to everyone who is issued company hardware or uses a personal device for work. Acceptable use and security of data are covered in the IT acceptable use and security policy.
+This document covers the hardware side of IT at GSVH Corp: company-issued equipment, bring-your-own-device (BYOD), software installation, VPN and remote access, and returning equipment when you change roles or leave. It applies to everyone who is issued company hardware or uses a personal device for work. Acceptable use and security of data are covered in the IT acceptable use and security policy.
 
 ## 1. Company-Issued Equipment
 

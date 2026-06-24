@@ -6,7 +6,7 @@ title: Employment Basics
 
 # Employment Basics
 
-This document defines the basic employment policies at Northwind Labs: the contract types we offer, our commitment to equal opportunity, how we recruit and select candidates, background checks, the employee referral program, attendance expectations, and the probation period for new hires. It applies to all employees, contractors, and hiring managers.
+This document defines the basic employment policies at GSVH Corp: the contract types we offer, our commitment to equal opportunity, how we recruit and select candidates, background checks, the employee referral program, attendance expectations, and the probation period for new hires. It applies to all employees, contractors, and hiring managers.
 
 ## 1. Employment Contract Types
 
@@ -18,7 +18,7 @@ Temporary contracts have a defined end date and may be renewed once before the c
 
 ## 2. Equal Opportunity Employment
 
-Northwind Labs is an equal opportunity employer. We do not tolerate discrimination against protected characteristics including gender, age, sexual orientation, race, nationality, ethnicity, religion, disability, or veteran status. We expect all employees, including executives and HR staff, to treat others with respect and professionalism.
+GSVH Corp is an equal opportunity employer. We do not tolerate discrimination against protected characteristics including gender, age, sexual orientation, race, nationality, ethnicity, religion, disability, or veteran status. We expect all employees, including executives and HR staff, to treat others with respect and professionalism.
 
 In practice this means we hire and promote people based on skills, experience, and potential, and we work to reduce bias in every process — for example, through structured interviews with predefined scoring rubrics. We make reasonable accommodations so people with disabilities can move safely about our premises and use our products, services, and equipment. We use inclusive, diversity-sensitive language in all official documents, signs, and job advertisements, and we run regular diversity and communication training.
 
@@ -54,7 +54,7 @@ Repeated unexplained absence is treated as a performance and conduct issue and i
 
 ## 7. Probation Period
 
-New hires serve a probation period of 90 calendar days from their start date. During probation, both the employee and the company can end the relationship with a shorter notice period (notice period) — one week rather than the standard notice — as the role is still being evaluated on both sides.
+New hires serve a probation period of 90 calendar days from their start date. During probation, both the employee and the company can end the relationship with a shorter notice — one week rather than the standard notice period (notice period) — as the role is still being evaluated on both sides.
 
 Managers should hold a structured check-in at the 30-day and 60-day marks and a formal review before the probation period ends. A probation period may be extended once, by up to 30 days, where more time is genuinely needed to assess fit; the extension and its reasons must be documented and shared with the employee. Successful completion of probation is confirmed in writing and does not change the employee's contract type.
 

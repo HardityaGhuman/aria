@@ -6,7 +6,7 @@ title: Remote Work and Commuting
 
 # Remote Work and Commuting
 
-This document explains how remote and hybrid work operate at Northwind Labs: eligibility, expectations, the home-office equipment stipend, and commuting and parking benefits. It applies to all employees whose roles can be performed remotely. The security requirements for working away from the office are in the IT acceptable use and equipment policies, and business travel costs are in the finance expenses policy.
+This document explains how remote and hybrid work operate at GSVH Corp: eligibility, expectations, the home-office equipment stipend, and commuting and parking benefits. It applies to all employees whose roles can be performed remotely. The security requirements for working away from the office are in the IT acceptable use and equipment policies, and business travel costs are in the finance expenses policy.
 
 ## 1. Work From Home (WFH) and Hybrid Working
 

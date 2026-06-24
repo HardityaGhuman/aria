@@ -6,7 +6,7 @@ title: Employee Code of Conduct
 
 # Employee Code of Conduct
 
-This Code of Conduct describes the behavior the company expects from everyone at Northwind Labs — employees, contractors, volunteers, vendors, and stakeholders. It covers dress code, conflicts of interest, relationships at work, workplace visitors, solicitation, harassment and violence, and workplace safety and health. These policies help us build a productive, lawful, and pleasant workplace. They apply to all employees regardless of department.
+This Code of Conduct describes the behavior the company expects from everyone at GSVH Corp — employees, contractors, volunteers, vendors, and stakeholders. It covers dress code, conflicts of interest, relationships at work, workplace visitors, solicitation, harassment and violence, and workplace safety and health. These policies help us build a productive, lawful, and pleasant workplace. They apply to all employees regardless of department.
 
 ## 1. Dress Code
 
