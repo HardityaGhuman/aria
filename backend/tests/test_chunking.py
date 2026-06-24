@@ -59,11 +59,15 @@ def test_structureless_doc_not_tagged_overview():
 def test_tabular_rows_pass_through_as_one_chunk_each():
     rows = [
         Document(page_content="[Table: t.csv | L4]\nlevel: L4\nbase_salary_usd: 165000",
-                 metadata={"is_tabular": True, "content_type": "reference_table"}),
+                 metadata={"is_tabular": True, "content_type": "reference_table",
+                           "access_tier": "hr_only"}),
         Document(page_content="[Table: t.csv | L5]\nlevel: L5\nbase_salary_usd: 205000",
-                 metadata={"is_tabular": True, "content_type": "reference_table"}),
+                 metadata={"is_tabular": True, "content_type": "reference_table",
+                           "access_tier": "hr_only"}),
     ]
     chunks = chunk_documents(rows)
     assert len(chunks) == 2
     assert all(c.metadata["content_type"] == "reference_table" for c in chunks)
     assert "base_salary_usd: 165000" in chunks[0].page_content
+    # Loader-stamped metadata must survive the bypass (regression guard).
+    assert all(c.metadata["access_tier"] == "hr_only" for c in chunks)
