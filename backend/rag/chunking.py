@@ -156,7 +156,7 @@ def chunk_documents(pages: list[Document]) -> list[Document]:
         return [
             Document(
                 page_content=p.page_content,
-                metadata={"content_type": "reference_table", "parent_section": ""},
+                metadata={**p.metadata, "content_type": "reference_table", "parent_section": ""},
             )
             for p in pages
             if p.page_content.strip()

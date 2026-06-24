@@ -19,7 +19,7 @@ langchain-text-splitters>=0.3.0
 bcrypt>=4.1.0
 PyJWT>=2.8.0
 
-openpyxl
+openpyxl>=3.1.0
 
 # Test
 pytest>=8.0.0
