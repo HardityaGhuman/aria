@@ -35,7 +35,13 @@ def _connect():
 
 
 def initialize_users_table() -> None:
-    """Create the ``users`` table if it does not exist. Idempotent."""
+    """Create the ``users`` table if it does not exist. Idempotent.
+
+    Also upgrades the role CHECK constraint on pre-existing DBs so the
+    ``manager`` role is accepted. ``CREATE TABLE IF NOT EXISTS`` silently
+    skips the CREATE when the table already exists, so the ALTER TABLE lines
+    below handle in-place migration without data loss.
+    """
     with _connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -44,10 +50,16 @@ def initialize_users_table() -> None:
                     id BIGSERIAL PRIMARY KEY,
                     email TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK (role IN ('hr', 'employee')),
+                    role TEXT NOT NULL CHECK (role IN ('hr', 'manager', 'employee')),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            # Idempotent upgrade for DBs created before the manager role existed.
+            cursor.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check")
+            cursor.execute(
+                "ALTER TABLE users ADD CONSTRAINT users_role_check "
+                "CHECK (role IN ('hr', 'manager', 'employee'))"
             )
 
 

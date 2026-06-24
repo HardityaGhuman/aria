@@ -26,6 +26,22 @@ class AuthError(Exception):
     message: str
 
 
+# --- RBAC ---
+# The access tiers a role may retrieve. HR sees everything; everyone else sees
+# only "all"-tier documents. Generic by design: a restricted tier is hidden from
+# non-HR roles without naming any specific document.
+_ROLE_TIERS = {
+    "hr": ["all", "manager", "hr_only"],
+    "manager": ["all", "manager"],
+}
+_DEFAULT_TIERS = ["all"]
+
+
+def tiers_for_role(role: str | None) -> list[str]:
+    """Return the access tiers visible to ``role`` (defaults to all-only)."""
+    return _ROLE_TIERS.get(role, _DEFAULT_TIERS)
+
+
 def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt (random per-password salt)."""
     return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")

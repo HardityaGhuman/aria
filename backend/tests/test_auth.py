@@ -42,3 +42,40 @@ def test_decode_rejects_expired_token():
 def test_decode_rejects_garbage():
     with pytest.raises(auth.AuthError):
         auth.decode_token("not-a-jwt")
+
+
+# --- RBAC: role -> visible access tiers ---
+
+def test_hr_sees_all_tiers():
+    assert set(auth.tiers_for_role("hr")) == {"all", "manager", "hr_only"}
+
+
+def test_employee_sees_only_all():
+    assert auth.tiers_for_role("employee") == ["all"]
+
+
+def test_unknown_or_missing_role_defaults_to_all_only():
+    assert auth.tiers_for_role("whatever") == ["all"]
+    assert auth.tiers_for_role(None) == ["all"]
+
+
+# --- manager tier ---
+
+def test_employee_sees_only_all_tier():
+    assert auth.tiers_for_role("employee") == ["all"]
+
+
+def test_manager_sees_all_and_manager_not_hr():
+    tiers = auth.tiers_for_role("manager")
+    assert "all" in tiers and "manager" in tiers
+    assert "hr_only" not in tiers
+
+
+def test_hr_sees_every_tier():
+    tiers = auth.tiers_for_role("hr")
+    assert set(tiers) == {"all", "manager", "hr_only"}
+
+
+def test_unknown_role_defaults_to_all_only():
+    assert auth.tiers_for_role("ceo") == ["all"]
+    assert auth.tiers_for_role(None) == ["all"]
