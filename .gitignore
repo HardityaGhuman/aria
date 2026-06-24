@@ -35,6 +35,8 @@ backend/data/docs_archive/
 *.db-shm
 *.db-wal
 *.pdf
+# ...but corpus PDFs are source-of-truth for RAG and must be tracked.
+!backend/data/docs/**/*.pdf
 
 # Logs and runtime output
 *.log
@@ -65,3 +67,5 @@ dist/
 node_modules/
 .next/
 *.local
+
+
