@@ -19,7 +19,7 @@ from backend.rag.loaders import clean_text
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
 # Bump to force a one-time reindex when chunking logic changes.
-CHUNK_VERSION = "2026-06-23-multisource-md-v6"
+CHUNK_VERSION = "2026-06-24-axes-tabular-v8"
 # Sections shorter than this are treated as heading/intro blurbs ("In this
 # section we explain...") and folded forward into the next real section, so they
 # don't survive as low-content chunks that win retrieval slots without payload.
@@ -30,11 +30,15 @@ SECTION_SPLITTER = RecursiveCharacterTextSplitter(
     chunk_overlap=CHUNK_OVERLAP,
 )
 
-# Structured heading prefixes: Roman numerals (IV.), decimal (1. / 2.3), lettered (A.)
+# Structured heading prefixes for non-markdown (PDF) docs: Roman numerals (IV.),
+# decimal (1. / 2.3), lettered (A.). Only used when a doc has no markdown headings.
 _HEADING_PREFIX = re.compile(r"^(?:[IVXLCDM]+\.|\d+(?:\.\d+)*\.?|[A-Z]\.)\s+\S")
-# Markdown ATX headings (# .. ###### Title). Markdown docs (the policy corpus)
-# carry no TOC page, so these are the primary section boundaries for them.
-_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+\S")
+
+
+def _heading_level(line: str) -> int:
+    """Markdown ATX heading level (1-6), or 0 if the line is not a heading."""
+    match = re.match(r"^(#{1,6})\s+\S", line.strip())
+    return len(match.group(1)) if match else 0
 
 
 def _normalize_heading(line: str) -> str:
@@ -71,24 +75,30 @@ def _extract_toc_titles(toc_text: str) -> set[str]:
     return titles
 
 
-def _is_heading(line: str, toc_titles: set[str]) -> bool:
+def _is_heading(line: str, toc_titles: set[str], md_mode: bool) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    if _MARKDOWN_HEADING.match(stripped):
-        return True
+    # Markdown docs: only H2+ (##) are section boundaries. The H1 title stays in
+    # the leading block (tagged "overview"), and numbered list items ("1. ...")
+    # are never treated as headings — that is what kept fragmenting lists.
+    if md_mode:
+        return _heading_level(stripped) >= 2
+    # Non-markdown (PDF) docs: fall back to TOC titles + structured prefixes
+    # (Roman/decimal/lettered), which is where the numbered-prefix heuristic
+    # legitimately applies.
     if stripped.lower() in toc_titles:
         return True
     return bool(_HEADING_PREFIX.match(stripped))
 
 
-def _split_into_sections(content: str, toc_titles: set[str]) -> list[tuple[str, str]]:
+def _split_into_sections(content: str, toc_titles: set[str], md_mode: bool) -> list[tuple[str, str]]:
     """Split body text at detected headings into (heading, text) pairs."""
     sections: list[tuple[str, str]] = []
     heading = ""
     buffer: list[str] = []
     for line in content.split("\n"):
-        if _is_heading(line, toc_titles):
+        if _is_heading(line, toc_titles, md_mode):
             if buffer:
                 sections.append((heading, "\n".join(buffer).strip()))
             heading = _normalize_heading(line)
@@ -159,11 +169,21 @@ def chunk_documents(pages: list[Document]) -> list[Document]:
     # downstream) when a document has no detectable structure.
     if content_pages:
         content_full = clean_text("\n\n".join(content_pages))
-        sections = _split_into_sections(content_full, toc_titles)
+        md_mode = any(_heading_level(line) >= 1 for line in content_full.split("\n"))
+        sections = _split_into_sections(content_full, toc_titles, md_mode)
         if not sections:
             sections = [("", content_full)]
 
-        for heading, text in _merge_tiny_sections(sections):
-            _add_section_chunks(text, chunks, "content", heading[:120])
+        merged = _merge_tiny_sections(sections)
+        for index, (heading, text) in enumerate(merged):
+            # In a markdown doc the leading block (H1 title + intro, before the
+            # first ## section) carries no answer payload — it just enumerates the
+            # doc's topics, so it wins retrieval slots semantically while answering
+            # nothing. Tag it "overview" so retrieval can exclude it, the same way
+            # TOC pages are excluded. Only when real sections follow; a doc that is
+            # ONE block stays "content" so its content is never silently dropped.
+            is_overview = md_mode and index == 0 and heading == "" and len(merged) > 1
+            content_type = "overview" if is_overview else "content"
+            _add_section_chunks(text, chunks, content_type, heading[:120])
 
     return chunks

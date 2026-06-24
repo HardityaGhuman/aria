@@ -19,6 +19,10 @@ SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt"}
 # Default tier for any document that does not declare one. "all" means every
 # authenticated user may retrieve it; the only other tier today is "hr_only".
 DEFAULT_ACCESS_TIER = "all"
+DEFAULT_REGION = "global"
+DEFAULT_DOC_TYPE = "policy"
+DEFAULT_VERSION = "2026.1"
+DEFAULT_EFFECTIVE_DATE = "2026-01-01"
 
 
 def file_hash(filepath: str) -> str:
@@ -126,7 +130,15 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
 
     department = frontmatter.get("department") or department_fallback
     access_tier = frontmatter.get("access_tier") or DEFAULT_ACCESS_TIER
+    region = frontmatter.get("region") or DEFAULT_REGION
+    doc_type = frontmatter.get("doc_type") or DEFAULT_DOC_TYPE
+    version = frontmatter.get("version") or DEFAULT_VERSION
+    effective_date = frontmatter.get("effective_date") or DEFAULT_EFFECTIVE_DATE
     for doc in docs:
         doc.metadata["department"] = department
         doc.metadata["access_tier"] = access_tier
+        doc.metadata["region"] = region
+        doc.metadata["doc_type"] = doc_type
+        doc.metadata["version"] = version
+        doc.metadata["effective_date"] = effective_date
     return docs
