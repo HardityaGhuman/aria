@@ -55,7 +55,7 @@ def get_bm25_index():
     if _bm25_index is None:
         collection = get_collection()
         docs = collection.get(
-            where={"content_type": {"$ne": "toc"}},
+            where={"content_type": {"$nin": ["toc", "overview"]}},
             include=["documents", "metadatas"],
         )
         _bm25_metadata = docs.get("metadatas", [])
