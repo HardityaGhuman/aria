@@ -6,6 +6,7 @@ Authentication primitives: password hashing (bcrypt), JWT access tokens
 role. The single seam to swap for asymmetric keys / a managed IdP at the
 serverless step.
 """
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -17,7 +18,12 @@ from fastapi import Depends, HTTPException, status
 # pyrefly: ignore [missing-import]
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.core.config import JWT_ALGORITHM, JWT_EXPIRY_HOURS, require_jwt_secret
+from backend.core.config import (
+    ACCESS_TOKEN_TTL_MIN,
+    JWT_ALGORITHM,
+    REFRESH_TOKEN_TTL_DAYS,
+    require_jwt_secret,
+)
 
 
 @dataclass
@@ -63,18 +69,36 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
-def create_access_token(user: dict, expires_in_hours: int | None = None) -> str:
-    """Sign an HS256 JWT carrying the user's id (``sub``), role, region, and expiry."""
-    hours = JWT_EXPIRY_HOURS if expires_in_hours is None else expires_in_hours
+def create_access_token(user: dict, expires_in_min: int | None = None) -> str:
+    """Sign a short-lived HS256 access JWT (id/role/region, ``type:"access"``)."""
+    minutes = ACCESS_TOKEN_TTL_MIN if expires_in_min is None else expires_in_min
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user["id"]),
         "role": user["role"],
         "region": user.get("region", _DEFAULT_REGION),
-        "exp": now + timedelta(hours=hours),
+        "type": "access",
+        "jti": uuid.uuid4().hex,
+        "exp": now + timedelta(minutes=minutes),
         "iat": now,
     }
     return jwt.encode(payload, require_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token(user: dict) -> tuple[str, str, datetime]:
+    """Sign a long-lived refresh JWT. Returns ``(token, jti, expires_at)`` so the
+    caller can persist the jti for rotation/revocation."""
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
+    jti = uuid.uuid4().hex
+    payload = {
+        "sub": str(user["id"]),
+        "type": "refresh",
+        "jti": jti,
+        "exp": expires_at,
+        "iat": now,
+    }
+    return jwt.encode(payload, require_jwt_secret(), algorithm=JWT_ALGORITHM), jti, expires_at
 
 
 def decode_token(token: str) -> dict:
@@ -108,6 +132,10 @@ def get_current_user(
         )
     try:
         claims = decode_token(credentials.credentials)
+        # Only access tokens authenticate requests; a refresh token presented as
+        # a Bearer credential must be rejected.
+        if claims.get("type") != "access":
+            raise AuthError("Not an access token")
         user = {
             "id": int(claims["sub"]),
             "role": claims["role"],
