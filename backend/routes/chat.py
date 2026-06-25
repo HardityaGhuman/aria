@@ -5,11 +5,14 @@ Thin HTTP layer for the chat feature. Orchestration lives in
 ``backend.services.chat_service``; these handlers just validate, delegate, and
 shape responses.
 """
+import json
 import os
 import time
 
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException
+# pyrefly: ignore [missing-import]
+from sse_starlette.sse import EventSourceResponse
 
 from backend.core.auth import get_current_user, regions_for_user, tiers_for_role
 from backend.core.chat_memory import (
@@ -19,7 +22,7 @@ from backend.core.chat_memory import (
 )
 from backend.models import ChatRequest, ChatResponse
 from backend.models.response_models import Source
-from backend.services.chat_service import generate_chat_reply
+from backend.services.chat_service import generate_chat_reply, stream_chat_reply
 
 
 def _to_sources(raw: list[dict]) -> list[Source]:
@@ -61,6 +64,26 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         session_id=req.session_id,
         status=result.status,
     )
+
+
+@router.post("/stream")
+async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+    """Stream the answer token-by-token over SSE.
+
+    Same auth/RBAC as ``POST /chat``; the body is identical. Emits typed events
+    (token/sources/done/error). The service yields event dicts with a structured
+    ``data`` payload; here we JSON-encode that payload onto the SSE ``data`` field.
+    """
+    async def event_publisher():
+        async for event in stream_chat_reply(
+            req.session_id,
+            req.message,
+            allowed_tiers=tiers_for_role(user["role"]),
+            allowed_regions=regions_for_user(user["region"]),
+        ):
+            yield {"event": event["event"], "data": json.dumps(event["data"])}
+
+    return EventSourceResponse(event_publisher())
 
 
 @router.get("/history/{session_id}")
