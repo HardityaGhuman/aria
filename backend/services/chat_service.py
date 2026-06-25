@@ -46,6 +46,10 @@ NO_RESULTS_MESSAGE = (
     "I couldn't find specific information on that in the handbook. "
     "Please check with HR or the Executive Director."
 )
+CONFIDENTIAL_MESSAGE = (
+    "That information is restricted and isn't available at your access level. "
+    "Please contact {contact} for details."
+)
 
 # A genuine "I can't answer this" reply is one or two short sentences. A real
 # answer that merely appends a "Not found in the provided documents:" note about
@@ -159,6 +163,9 @@ async def _answer_policy_query(
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
+    if retrieved.status == "blocked":
+        contact = retrieved.blocked_contact or "HR"
+        return ChatResult(CONFIDENTIAL_MESSAGE.format(contact=contact), "", [])
     if not retrieved.sources:
         return ChatResult(NO_RESULTS_MESSAGE, "", [])
 
