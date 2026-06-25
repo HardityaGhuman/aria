@@ -242,8 +242,6 @@ All routes except `/health` and `/auth/login` require `Authorization: Bearer <to
 | `POST` | `/auth/login` | none | Exchange email + password for a JWT |
 | `GET` | `/auth/me` | any user | Current user `{id, role, region}` |
 | `POST` | `/chat` | any user | Ask a question; returns answer + context + sources (tier + region filtered) |
-| `GET` | `/chat/documents` | any user | List the policy files in the indexed corpus |
-| `GET` | `/chat/documents/{filename}/download` | any user | Download a source document |
 | `GET` | `/chat/history/{session_id}` | any user | Get persisted session chat history |
 | `DELETE` | `/chat/history/{session_id}` | any user | Clear persisted session chat history |
 | `POST` | `/admin/reindex` | HR only | Rebuild the vector index from the corpus |

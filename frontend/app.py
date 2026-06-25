@@ -110,26 +110,6 @@ def render_login():
 
 
 # ── Backend helpers ──────────────────────────────────────────────────
-@st.cache_data(ttl=30)
-def fetch_policy_documents(token: str):
-    resp = requests.get(
-        f"{CHAT_ENDPOINT}/documents", headers={"Authorization": f"Bearer {token}"}, timeout=5
-    )
-    resp.raise_for_status()
-    return resp.json().get("documents", [])
-
-
-@st.cache_data(ttl=300)
-def fetch_document_bytes(filename: str, token: str) -> bytes:
-    resp = requests.get(
-        f"{CHAT_ENDPOINT}/documents/{filename}/download",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.content
-
-
 def render_retrieval(sources, context):
     """Show exactly what was retrieved: per-chunk source path, department,
     access tier, section, and the exact context block sent to the model."""
@@ -201,36 +181,6 @@ with st.sidebar:
     st.markdown("### Policy Library")
     st.caption(f"Signed in as **{st.session_state.email}** · `{st.session_state.role}`")
 
-    if DOC_DRIVE_URL:
-        # Hosted documents: one link to the shared drive, independent of the
-        # backend so it always shows even before the index is built.
-        st.link_button("Open policy documents", DOC_DRIVE_URL, use_container_width=True)
-    else:
-        # Local mode: list indexed docs with download buttons from the backend.
-        try:
-            documents = fetch_policy_documents(st.session_state.token)
-        except Exception:
-            documents = []
-
-        if documents:
-            _mime = {"pdf": "application/pdf", "md": "text/markdown", "txt": "text/plain"}
-            for document in documents:
-                rel_path = document["filename"]                  # e.g. hr/employment-basics.md
-                label = os.path.basename(rel_path)
-                dept = document.get("department")
-                try:
-                    st.download_button(
-                        f"{label}" + (f"  ·  {dept}" if dept else ""),
-                        data=fetch_document_bytes(rel_path, st.session_state.token),
-                        file_name=label,
-                        mime=_mime.get(document.get("type", ""), "application/octet-stream"),
-                        use_container_width=True,
-                    )
-                except Exception:
-                    st.caption(rel_path)
-        else:
-            st.caption("No policy documents are indexed yet.")
-
     # HR-only: trigger a reindex of the policy corpus.
     if st.session_state.role == "hr":
         st.divider()
@@ -254,7 +204,6 @@ with st.sidebar:
                         f"Reindexed: {s.get('indexed', 0)} added, "
                         f"{s.get('skipped', 0)} skipped, {s.get('deleted', 0)} removed."
                     )
-                    fetch_policy_documents.clear()
                 else:
                     st.error("Reindex failed. Check server logs.")
 
