@@ -64,3 +64,17 @@ def test_hr_sees_every_tier():
 def test_unknown_role_defaults_to_all_only():
     assert auth.tiers_for_role("ceo") == ["all"]
     assert auth.tiers_for_role(None) == ["all"]
+
+
+# --- region -> visible doc regions ---
+
+def test_regions_for_user_us():
+    assert auth.regions_for_user("us") == ["global", "us"]
+
+
+def test_regions_for_user_india():
+    assert auth.regions_for_user("india") == ["global", "india"]
+
+
+def test_regions_for_user_none_defaults_to_us():
+    assert auth.regions_for_user(None) == ["global", "us"]

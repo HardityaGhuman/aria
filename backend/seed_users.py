@@ -21,12 +21,12 @@ from backend.core.users import (
     initialize_users_table,
 )
 
-# (email, role, env var holding the password)
+# (email, role, region, env var holding the password)
 SEED_USERS = [
-    ("hr@gsvh.test", "hr", "SEED_HR_PASSWORD"),
-    ("manager@gsvh.test", "manager", "SEED_MANAGER_PASSWORD"),
-    ("employee@gsvh.test", "employee", "SEED_EMPLOYEE_PASSWORD"),
-    ("employee2@gsvh.test", "employee", "SEED_EMPLOYEE2_PASSWORD"),
+    ("hr@gsvh.test", "hr", "us", "SEED_HR_PASSWORD"),
+    ("manager@gsvh.test", "manager", "us", "SEED_MANAGER_PASSWORD"),
+    ("employee@gsvh.test", "employee", "us", "SEED_EMPLOYEE_PASSWORD"),
+    ("employee2@gsvh.test", "employee", "india", "SEED_EMPLOYEE2_PASSWORD"),
 ]
 
 
@@ -43,7 +43,7 @@ def _password_for(env_var: str, email: str) -> str | None:
 def main() -> int:
     initialize_users_table()
     created = skipped = 0
-    for email, role, env_var in SEED_USERS:
+    for email, role, region, env_var in SEED_USERS:
         if get_user_by_email(email):
             print(f"skip   {email} (already exists)")
             skipped += 1
@@ -53,7 +53,7 @@ def main() -> int:
             print(f"skip   {email} (no password provided)", file=sys.stderr)
             skipped += 1
             continue
-        create_user(email, hash_password(password), role)
+        create_user(email, hash_password(password), role, region)
         print(f"create {email} ({role})")
         created += 1
     print(f"done: {created} created, {skipped} skipped")
