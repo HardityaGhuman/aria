@@ -6,6 +6,8 @@ classification, retrieval-augmented answering, the grounding guardrails, and
 answer scoring. Routes delegate here and stay thin.
 """
 import asyncio
+import os
+import time
 from dataclasses import dataclass
 
 # pyrefly: ignore [missing-import]
@@ -29,6 +31,7 @@ from backend.core.llm import (
     count_tokens,
     get_llm_response,
     get_meta_response,
+    stream_llm_response,
     summarize_history,
 )
 from backend.core.logging import get_logger
@@ -234,3 +237,146 @@ async def generate_chat_reply(
         raise HTTPException(status_code=503, detail=e.message)
 
     return result
+
+
+# --- SSE streaming ---
+
+# Marks the end of the synchronous LLM token generator when pulled across threads.
+_STREAM_DONE = object()
+
+
+def _source_dicts(raw_sources: list[dict]) -> list[dict]:
+    """Map the retriever's per-chunk dicts onto the frozen Source shape used in
+    the response envelope (document_id/file/section/source_type)."""
+    out = []
+    for item in raw_sources:
+        document_id = item.get("source", "")
+        out.append({
+            "document_id": document_id,
+            "file": os.path.basename(document_id),
+            "section": item.get("section"),
+            "source_type": item.get("access_tier"),
+        })
+    return out
+
+
+def _next_token(iterator):
+    """Pull one token from a sync generator, returning the sentinel when drained.
+    Called via ``asyncio.to_thread`` so the blocking LLM read never stalls the
+    event loop while other requests are served."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _STREAM_DONE
+
+
+async def _persist_quietly(session_id: str, message: str, answer: str) -> None:
+    """Persist the exchange after the answer is already streamed. A memory error
+    here must not corrupt a response the client has fully received — log, don't raise."""
+    try:
+        await asyncio.to_thread(append_exchange, session_id, message, answer)
+    except Exception:
+        logger.exception("Failed to persist streamed exchange for session %s", session_id)
+
+
+async def stream_chat_reply(
+    session_id: str,
+    message: str,
+    allowed_tiers: list[str] | None = None,
+    allowed_regions: list[str] | None = None,
+):
+    """Async generator yielding typed SSE events for the chat flow.
+
+    Event protocol (clients MUST ignore unknown event types — this reserves
+    ``tool_call``/``step`` for the later agentic path):
+        token   {"delta": "..."}            incremental answer text
+        sources {"sources": [Source, ...]}  citations (emitted once, after tokens)
+        done    <ChatResponse envelope>     final answer/status/latency
+        error   {"code","message","detail"} a failure; terminal
+
+    Graceful non-answers (refused/blocked/no_results) emit a single ``done`` with
+    that status and NO token events.
+    """
+    started = time.perf_counter()
+
+    def _envelope(answer: str, sources: list[dict], status: str) -> dict:
+        return {
+            "answer": answer,
+            "sources": sources,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "session_id": session_id,
+            "status": status,
+        }
+
+    try:
+        if not message.strip():
+            yield {"event": "error", "data": {
+                "code": "validation_error", "message": "Message cannot be empty.", "detail": None,
+            }}
+            return
+
+        formatted_history = _prepare_history(session_id)
+        classification = await asyncio.to_thread(classify_query, message, formatted_history)
+
+        if classification == "out_of_scope":
+            yield {"event": "done", "data": _envelope(REFUSAL_MESSAGE, [], "refused")}
+            await _persist_quietly(session_id, message, REFUSAL_MESSAGE)
+            return
+
+        if classification == "meta":
+            answer = await asyncio.to_thread(get_meta_response, message, formatted_history)
+            yield {"event": "token", "data": {"delta": answer}}
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(answer, [], "ok")}
+            await _persist_quietly(session_id, message, answer)
+            return
+
+        # policy path
+        search_query = await _resolve_search_query(message, formatted_history)
+        retrieved = await asyncio.to_thread(
+            retrieve_context, search_query,
+            allowed_tiers=allowed_tiers, allowed_regions=allowed_regions,
+        )
+
+        if retrieved.status == "blocked":
+            contact = retrieved.blocked_contact or "HR"
+            answer = CONFIDENTIAL_MESSAGE.format(contact=contact)
+            yield {"event": "done", "data": _envelope(answer, [], "blocked")}
+            await _persist_quietly(session_id, message, answer)
+            return
+
+        if not retrieved.sources:
+            yield {"event": "done", "data": _envelope(NO_RESULTS_MESSAGE, [], "no_results")}
+            await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE)
+            return
+
+        token_iter = stream_llm_response(message, retrieved.text, formatted_history)
+        full_answer = ""
+        while True:
+            delta = await asyncio.to_thread(_next_token, token_iter)
+            if delta is _STREAM_DONE:
+                break
+            if delta:
+                full_answer += delta
+                yield {"event": "token", "data": {"delta": delta}}
+
+        # Post-checks mirror the non-streaming path: an ungrounded answer drops
+        # its sources and reports the matching status.
+        if _is_refusal(full_answer):
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(full_answer, [], "refused")}
+        elif _is_insufficient_policy_answer(full_answer):
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
+        else:
+            sources = _source_dicts(retrieved.sources)
+            yield {"event": "sources", "data": {"sources": sources}}
+            yield {"event": "done", "data": _envelope(full_answer, sources, "ok")}
+
+        await _persist_quietly(session_id, message, full_answer)
+
+    except Exception:
+        logger.exception("Streaming chat failed for session %s", session_id)
+        yield {"event": "error", "data": {
+            "code": "internal_error", "message": "An unexpected error occurred.", "detail": None,
+        }}

@@ -10,10 +10,13 @@ pypdf>=4.2.0
 streamlit>=1.32.0
 requests>=2.31.0
 rank_bm25>=0.2.2
+# SSE token streaming for POST /chat/stream
+sse-starlette>=2.1.0
 langchain-core>=0.3.0
 langchain-chroma>=0.1.0
 langchain-huggingface>=0.1.0
 langchain-text-splitters>=0.3.0
+
 
 # Auth
 bcrypt>=4.1.0

@@ -176,6 +176,35 @@ Retrieved policy excerpts:
     return response.choices[0].message.content
 
 
+def stream_llm_response(user_message: str, context: str, history: list[dict]):
+    """Yield the answer token-by-token (LiteLLM ``stream=True``).
+
+    Same prompt construction as ``get_llm_response`` — only the transport differs:
+    this returns incremental text deltas so the API can push tokens over SSE as
+    the model produces them, instead of blocking until the full answer is ready.
+    """
+    system_prompt = load_system_prompt()
+    augmented_message = f"""Employee question:
+{user_message}
+
+Retrieved policy excerpts:
+{context}"""
+
+    messages = _build_messages(system_prompt, augmented_message, history)
+
+    response = litellm.completion(
+        model=MODEL_NAME,
+        messages=messages,
+        timeout=LLM_TIMEOUT_SECONDS,
+        temperature=0,
+        stream=True,
+    )
+    for chunk in response:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 def count_tokens(messages: list[dict]) -> int:
     """Count tokens in a list of messages. Fallback to character-based estimation on error."""
     try:
