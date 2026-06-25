@@ -95,7 +95,7 @@ Before starting a new project, product, or system that processes Restricted data
 
 ## 9. Vendor Data Processing
 
-When engaging a vendor who will process personal data on GSVH Corp's behalf, a **Data Processing Agreement (DPA)** must be executed before data is shared. Procurement (`finance/procurement-and-vendors.md`) will not onboard a vendor with data-processing responsibilities without a completed DPA. The DPA template is maintained by Legal; use it without modification unless Legal approves an alternative.
+When engaging a vendor who will process personal data on GSVH Corp's behalf, a **Data Processing Agreement (DPA)** must be executed before data is shared. Procurement will not onboard a vendor with data-processing responsibilities without a completed DPA. The DPA template is maintained by Legal; use it without modification unless Legal approves an alternative.
 
 ## 10. Contact
 
