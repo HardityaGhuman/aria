@@ -20,9 +20,23 @@ from backend.core.chat_memory import (
     clear_history as clear_session_history,
     get_history as get_session_history,
 )
+from backend.core.session_store import session_store
 from backend.models import ChatRequest, ChatResponse
-from backend.models.response_models import Source
+from backend.models.request_models import RenameSessionRequest
+from backend.models.response_models import CreateSessionResponse, SessionInfo, Source
 from backend.services.chat_service import generate_chat_reply, stream_chat_reply
+
+
+def _require_owned_session(session_id: str, user: dict) -> None:
+    """403 unless ``session_id`` belongs to the caller; 404 if it doesn't exist.
+
+    The single ownership gate for session mutations — keeps user A out of user
+    B's conversations."""
+    owner = session_store.owner_of(session_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if owner != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your session.")
 
 
 def _to_sources(raw: list[dict]) -> list[Source]:
@@ -55,6 +69,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         req.message,
         allowed_tiers=tiers_for_role(user["role"]),
         allowed_regions=regions_for_user(user["region"]),
+        owner_user_id=user["id"],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
     return ChatResponse(
@@ -80,10 +95,62 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             req.message,
             allowed_tiers=tiers_for_role(user["role"]),
             allowed_regions=regions_for_user(user["region"]),
+            owner_user_id=user["id"],
         ):
             yield {"event": event["event"], "data": json.dumps(event["data"])}
 
     return EventSourceResponse(event_publisher())
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(user: dict = Depends(get_current_user)):
+    """List the caller's own conversations, most recently active first."""
+    try:
+        rows = session_store.list_for_owner(user["id"])
+    except ChatMemoryError as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    return [
+        SessionInfo(
+            session_id=row["session_id"],
+            title=row.get("title"),
+            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/sessions", response_model=CreateSessionResponse, status_code=201)
+async def create_session(user: dict = Depends(get_current_user)):
+    """Create a new empty conversation owned by the caller."""
+    try:
+        session_id = session_store.create(user["id"])
+    except ChatMemoryError as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    return CreateSessionResponse(session_id=session_id)
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionInfo)
+async def rename_session(
+    session_id: str, req: RenameSessionRequest, user: dict = Depends(get_current_user)
+):
+    """Rename one of the caller's conversations."""
+    _require_owned_session(session_id, user)
+    try:
+        session_store.rename(session_id, req.title)
+    except ChatMemoryError as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    return SessionInfo(session_id=session_id, title=req.title, updated_at=None)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
+    """Delete one of the caller's conversations and its messages."""
+    _require_owned_session(session_id, user)
+    try:
+        session_store.delete(session_id)
+    except ChatMemoryError as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    return {"message": f"Session {session_id} deleted."}
 
 
 @router.get("/history/{session_id}")

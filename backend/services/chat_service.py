@@ -197,6 +197,7 @@ async def generate_chat_reply(
     message: str,
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
+    owner_user_id: int | None = None,
 ) -> ChatResult:
     """Full chat flow: prepare history, classify, answer, persist the exchange.
 
@@ -232,7 +233,7 @@ async def generate_chat_reply(
         result = await _answer_policy_query(message, formatted_history, allowed_tiers, allowed_regions)
 
     try:
-        append_exchange(session_id, message, result.reply)
+        append_exchange(session_id, message, result.reply, owner_user_id=owner_user_id)
     except ChatMemoryError as e:
         raise HTTPException(status_code=503, detail=e.message)
 
@@ -270,11 +271,15 @@ def _next_token(iterator):
         return _STREAM_DONE
 
 
-async def _persist_quietly(session_id: str, message: str, answer: str) -> None:
+async def _persist_quietly(
+    session_id: str, message: str, answer: str, owner_user_id: int | None = None
+) -> None:
     """Persist the exchange after the answer is already streamed. A memory error
     here must not corrupt a response the client has fully received — log, don't raise."""
     try:
-        await asyncio.to_thread(append_exchange, session_id, message, answer)
+        await asyncio.to_thread(
+            append_exchange, session_id, message, answer, owner_user_id
+        )
     except Exception:
         logger.exception("Failed to persist streamed exchange for session %s", session_id)
 
@@ -284,6 +289,7 @@ async def stream_chat_reply(
     message: str,
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
+    owner_user_id: int | None = None,
 ):
     """Async generator yielding typed SSE events for the chat flow.
 
@@ -320,7 +326,7 @@ async def stream_chat_reply(
 
         if classification == "out_of_scope":
             yield {"event": "done", "data": _envelope(REFUSAL_MESSAGE, [], "refused")}
-            await _persist_quietly(session_id, message, REFUSAL_MESSAGE)
+            await _persist_quietly(session_id, message, REFUSAL_MESSAGE, owner_user_id)
             return
 
         if classification == "meta":
@@ -328,7 +334,7 @@ async def stream_chat_reply(
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}
-            await _persist_quietly(session_id, message, answer)
+            await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
         # policy path
@@ -342,12 +348,12 @@ async def stream_chat_reply(
             contact = retrieved.blocked_contact or "HR"
             answer = CONFIDENTIAL_MESSAGE.format(contact=contact)
             yield {"event": "done", "data": _envelope(answer, [], "blocked")}
-            await _persist_quietly(session_id, message, answer)
+            await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
         if not retrieved.sources:
             yield {"event": "done", "data": _envelope(NO_RESULTS_MESSAGE, [], "no_results")}
-            await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE)
+            await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
 
         token_iter = stream_llm_response(message, retrieved.text, formatted_history)
@@ -373,7 +379,7 @@ async def stream_chat_reply(
             yield {"event": "sources", "data": {"sources": sources}}
             yield {"event": "done", "data": _envelope(full_answer, sources, "ok")}
 
-        await _persist_quietly(session_id, message, full_answer)
+        await _persist_quietly(session_id, message, full_answer, owner_user_id)
 
     except Exception:
         logger.exception("Streaming chat failed for session %s", session_id)

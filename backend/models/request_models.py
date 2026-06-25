@@ -15,3 +15,9 @@ class ChatRequest(BaseModel):
         default="demo",
         description="Conversation id; each session keeps its own history.",
     )
+
+
+class RenameSessionRequest(BaseModel):
+    """Body for ``PATCH /chat/sessions/{session_id}``."""
+
+    title: str = Field(..., min_length=1, max_length=200, description="New session title.")

@@ -27,15 +27,20 @@ def _connect():
         ) from exc
 
 
-def _ensure_session(cursor, session_id: str) -> None:
+def _ensure_session(cursor, session_id: str, owner_user_id: int | None = None) -> None:
+    # On first insert, stamp the owner so the session is user-scoped. On conflict
+    # we only bump updated_at and never overwrite an existing owner (COALESCE keeps
+    # the original), so a chat call can't silently reassign someone else's session.
     cursor.execute(
         """
-        INSERT INTO chat_sessions (session_id)
-        VALUES (%s)
+        INSERT INTO chat_sessions (session_id, owner_user_id)
+        VALUES (%s, %s)
         ON CONFLICT (session_id)
-        DO UPDATE SET updated_at = now()
+        DO UPDATE SET
+            updated_at = now(),
+            owner_user_id = COALESCE(chat_sessions.owner_user_id, EXCLUDED.owner_user_id)
         """,
-        (session_id,),
+        (session_id, owner_user_id),
     )
 
 
@@ -57,6 +62,20 @@ def initialize_chat_memory() -> None:
                 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT
                 """
             )
+            # Identity is the connective tissue: a session is owned by a user, which
+            # is what later makes per-user listing, preferences, and RBAC coherent.
+            cursor.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS owner_user_id BIGINT"
+            )
+            cursor.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title TEXT"
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_owner
+                ON chat_sessions(owner_user_id, updated_at DESC)
+                """
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -76,10 +95,15 @@ def initialize_chat_memory() -> None:
             )
 
 
-def append_exchange(session_id: str, user_message: str, assistant_reply: str) -> None:
+def append_exchange(
+    session_id: str,
+    user_message: str,
+    assistant_reply: str,
+    owner_user_id: int | None = None,
+) -> None:
     with _connect() as connection:
         with connection.cursor() as cursor:
-            _ensure_session(cursor, session_id)
+            _ensure_session(cursor, session_id, owner_user_id)
             cursor.executemany(
                 """
                 INSERT INTO chat_messages (session_id, role, content)
