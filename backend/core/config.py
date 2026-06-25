@@ -15,6 +15,10 @@ MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "true"
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "6"))
+# Vector candidates beyond this cosine distance are dropped as non-matches.
+# Tunable so the eval harness can calibrate it instead of hardcoding a magic
+# number in the retrieval code.
+RETRIEVAL_MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.8"))
 RRF_K_CONSTANT = int(os.getenv("RRF_K_CONSTANT", "60"))
 BM25_CANDIDATE_POOL = int(os.getenv("BM25_CANDIDATE_POOL", "10"))
 # Active retrieval strategy for the live chat flow: "vector", "bm25", or "hybrid".

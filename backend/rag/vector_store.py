@@ -19,7 +19,7 @@ def get_vector_store():
             collection_name="company_docs",
             embedding_function=get_embedding_function(),
             persist_directory=CHROMA_DB_PATH,
-            # Cosine space so the retriever's MAX_DISTANCE is a meaningful
+            # Cosine space so the retriever's RETRIEVAL_MAX_DISTANCE is a meaningful
             # similarity cutoff. Chroma defaults to squared-L2, whose distances
             # sit far above any reasonable threshold for these embeddings.
             collection_metadata={"hnsw:space": "cosine"},

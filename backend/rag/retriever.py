@@ -10,12 +10,20 @@ from backend.rag.strategies import STRATEGIES
 from backend.rag.vector_store import get_collection
 
 
-def retrieve(query: str, strategy: str = None, n_results: int = None) -> RetrievedContext:
+def retrieve(
+    query: str,
+    strategy: str = None,
+    n_results: int = None,
+    allowed_tiers: list[str] | None = None,
+) -> RetrievedContext:
     """Retrieve context for ``query`` using the named strategy.
 
     Args:
         strategy:  "vector", "bm25", or "hybrid" (defaults to RETRIEVAL_STRATEGY).
         n_results: number of chunks to return (defaults to RETRIEVAL_TOP_K).
+        allowed_tiers: access tiers the caller may see (RBAC). ``None`` means no
+            restriction — used by the offline eval harness; live chat always
+            passes the caller's role tiers.
     """
     strategy = strategy or RETRIEVAL_STRATEGY
     if n_results is None:
@@ -28,7 +36,7 @@ def retrieve(query: str, strategy: str = None, n_results: int = None) -> Retriev
     if get_collection().count() == 0:
         return RetrievedContext("No company policy documents have been indexed yet.")
 
-    candidates = STRATEGIES[strategy](query)
+    candidates = STRATEGIES[strategy](query, allowed_tiers)
     if not candidates:
         return RetrievedContext("No relevant context found.")
 
@@ -56,6 +64,8 @@ def retrieve(query: str, strategy: str = None, n_results: int = None) -> Retriev
     return RetrievedContext("\n\n".join(formatted), sources)
 
 
-def retrieve_context(query: str, n_results: int = None) -> RetrievedContext:
+def retrieve_context(
+    query: str, n_results: int = None, allowed_tiers: list[str] | None = None
+) -> RetrievedContext:
     """Backwards-compatible entry point using the configured default strategy."""
-    return retrieve(query, n_results=n_results)
+    return retrieve(query, n_results=n_results, allowed_tiers=allowed_tiers)
