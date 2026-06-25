@@ -24,6 +24,7 @@ DEFAULT_REGION = "global"
 DEFAULT_DOC_TYPE = "policy"
 DEFAULT_VERSION = "2026.1"
 DEFAULT_EFFECTIVE_DATE = "2026-01-01"
+DEFAULT_STATUS = "active"
 
 
 def file_hash(filepath: str) -> str:
@@ -185,6 +186,7 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
     doc_type = frontmatter.get("doc_type") or DEFAULT_DOC_TYPE
     version = frontmatter.get("version") or DEFAULT_VERSION
     effective_date = frontmatter.get("effective_date") or DEFAULT_EFFECTIVE_DATE
+    status = frontmatter.get("status") or DEFAULT_STATUS
     for doc in docs:
         doc.metadata["department"] = department
         doc.metadata["access_tier"] = access_tier
@@ -192,6 +194,7 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
         doc.metadata["doc_type"] = doc_type
         doc.metadata["version"] = version
         doc.metadata["effective_date"] = effective_date
+        doc.metadata["status"] = status
 
     if extension in {".csv", ".xlsx"}:
         for doc in docs:
