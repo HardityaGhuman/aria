@@ -13,6 +13,7 @@ from backend.routes.auth import router as auth_router
 from backend.routes.admin import router as admin_router
 from backend.core.chat_memory import initialize_chat_memory
 from backend.core.config import FRONTEND_ORIGIN, require_jwt_secret
+from backend.core.doc_status import initialize_doc_status_table
 from backend.core.tokens import initialize_tokens_table
 from backend.core.users import initialize_users_table
 from backend.core.logging import get_logger, setup_logging
@@ -50,7 +51,8 @@ async def startup_event():
     initialize_chat_memory()
     initialize_users_table()
     initialize_tokens_table()
-    logger.info("Chat memory, users, and refresh-token tables ready.")
+    initialize_doc_status_table()
+    logger.info("Chat memory, users, refresh-token, and doc-status tables ready.")
 
     chunk_count = get_collection().count()
     if chunk_count == 0:
