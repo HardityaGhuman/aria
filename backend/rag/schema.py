@@ -23,3 +23,5 @@ class RetrievedContext:
 
     text: str
     sources: list[dict] = field(default_factory=list)
+    status: str = "ok"            # ok | empty | blocked
+    blocked_contact: str | None = None  # who to contact when status == "blocked"

@@ -31,34 +31,17 @@ def _chunk_id(metadata: dict) -> str:
     return f"{metadata.get('source')}:{metadata.get('chunk')}"
 
 
-def _vector_where(
-    allowed_tiers: list[str] | None,
-    allowed_regions: list[str] | None = None,
-) -> dict:
-    """Build the Chroma ``where`` clause: drop structural chunks, always
-    exclude superseded documents, and (when provided) restrict to the caller's
-    access tiers and/or regions.
-
-    ``allowed_tiers=None`` / ``allowed_regions=None`` means no restriction on
-    that axis — used by the offline eval harness.
-    """
+def _vector_where(allowed_regions: list[str] | None = None) -> dict:
+    """Chroma ``where``: drop structural chunks, always exclude superseded docs,
+    and (when provided) restrict to the caller's regions. Tier gating now lives in
+    the retriever (app-layer partition), not here."""
     filters: list[dict] = [
         {"content_type": {"$nin": _EXCLUDED_TYPES}},
-        # Superseded docs are never surfaced regardless of role or region.
         {"status": {"$ne": "superseded"}},
     ]
-    if allowed_tiers is not None:
-        filters.append({"access_tier": {"$in": allowed_tiers}})
     if allowed_regions is not None:
         filters.append({"region": {"$in": allowed_regions}})
     return filters[0] if len(filters) == 1 else {"$and": filters}
-
-
-def _tier_allowed(meta: dict, allowed_tiers: list[str] | None) -> bool:
-    """Tier gate for the BM25 path, whose index spans the whole corpus."""
-    if allowed_tiers is None:
-        return True
-    return meta.get("access_tier") in allowed_tiers
 
 
 def _region_allowed(meta: dict, allowed_regions: list[str] | None) -> bool:
@@ -75,7 +58,6 @@ def _status_active(meta: dict) -> bool:
 
 def vector_search(
     query: str,
-    allowed_tiers: list[str] | None = None,
     pool: int = BM25_CANDIDATE_POOL,
     allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
@@ -87,7 +69,7 @@ def vector_search(
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=pool,
-        where=_vector_where(allowed_tiers, allowed_regions),
+        where=_vector_where(allowed_regions),
         include=["documents", "metadatas", "distances"],
     )
 
@@ -104,7 +86,6 @@ def vector_search(
 
 def bm25_search(
     query: str,
-    allowed_tiers: list[str] | None = None,
     pool: int = BM25_CANDIDATE_POOL,
     allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
@@ -126,12 +107,10 @@ def bm25_search(
         meta = metadata[idx]
         # The BM25 index spans the whole corpus, so apply the same filters here
         # that the vector path applies via ``where``: structural exclusion,
-        # superseded status, access tier, and region.
+        # superseded status, and region. Tier gating is handled by the retriever.
         if meta.get("content_type") in _EXCLUDED_TYPES:
             continue
         if not _status_active(meta):
-            continue
-        if not _tier_allowed(meta, allowed_tiers):
             continue
         if not _region_allowed(meta, allowed_regions):
             continue
@@ -143,13 +122,12 @@ def bm25_search(
 
 def hybrid_search(
     query: str,
-    allowed_tiers: list[str] | None = None,
     pool: int = BM25_CANDIDATE_POOL,
     allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
     """Fuse vector + BM25 rankings with Reciprocal Rank Fusion."""
-    vec = vector_search(query, allowed_tiers, pool, allowed_regions)
-    bm = bm25_search(query, allowed_tiers, pool, allowed_regions)
+    vec = vector_search(query, pool, allowed_regions)
+    bm = bm25_search(query, pool, allowed_regions)
 
     vec_ids = [c.chunk_id for c in vec]
     bm_ids = [c.chunk_id for c in bm]

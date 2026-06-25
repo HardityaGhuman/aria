@@ -3,11 +3,41 @@ rag/retriever.py
 ----------------
 Runs a retrieval strategy and formats the result into a ``RetrievedContext``
 (the context block + per-chunk source metadata) for the answer step.
+
+The retriever is the single tier-enforcement point. Strategies return the full
+corpus (filtered only by region and status); this layer partitions candidates
+into allowed/blocked by the caller's tiers, and returns status="blocked" when
+something relevant exists but the caller cannot see it.
 """
 from backend.core.config import RETRIEVAL_STRATEGY, RETRIEVAL_TOP_K
-from backend.rag.schema import RetrievedContext
+from backend.rag.schema import Candidate, RetrievedContext
 from backend.rag.strategies import STRATEGIES
 from backend.rag.vector_store import get_collection
+
+
+def partition_by_tier(
+    candidates: list[Candidate],
+    allowed_tiers: list[str] | None,
+) -> tuple[list[Candidate], list[Candidate]]:
+    """Split candidates into (allowed, blocked) by access tier.
+
+    ``allowed_tiers=None`` (eval harness / no RBAC) means everything is allowed.
+    """
+    if allowed_tiers is None:
+        return list(candidates), []
+    allowed = [c for c in candidates if c.metadata.get("access_tier") in allowed_tiers]
+    blocked = [c for c in candidates if c.metadata.get("access_tier") not in allowed_tiers]
+    return allowed, blocked
+
+
+def blocked_contact(blocked: list[Candidate]) -> str:
+    """Who to refer the user to for a tier-blocked topic. Most restrictive wins."""
+    tiers = {c.metadata.get("access_tier") for c in blocked}
+    if "hr_only" in tiers:
+        return "HR"
+    if "manager" in tiers:
+        return "your manager"
+    return "HR"
 
 
 def retrieve(
@@ -20,8 +50,8 @@ def retrieve(
     """Retrieve context for ``query`` using the named strategy.
 
     Args:
-        strategy:  "vector", "bm25", or "hybrid" (defaults to RETRIEVAL_STRATEGY).
-        n_results: number of chunks to return (defaults to RETRIEVAL_TOP_K).
+        strategy:      "vector", "bm25", or "hybrid" (defaults to RETRIEVAL_STRATEGY).
+        n_results:     number of chunks to return (defaults to RETRIEVAL_TOP_K).
         allowed_tiers: access tiers the caller may see (RBAC). ``None`` means no
             restriction — used by the offline eval harness; live chat always
             passes the caller's role tiers.
@@ -37,15 +67,21 @@ def retrieve(
         )
 
     if get_collection().count() == 0:
-        return RetrievedContext("No company policy documents have been indexed yet.")
+        return RetrievedContext("No company policy documents have been indexed yet.", status="empty")
 
-    candidates = STRATEGIES[strategy](query, allowed_tiers, allowed_regions=allowed_regions)
+    candidates = STRATEGIES[strategy](query, allowed_regions=allowed_regions)
     if not candidates:
-        return RetrievedContext("No relevant context found.")
+        return RetrievedContext("No relevant context found.", status="empty")
+
+    allowed, blocked = partition_by_tier(candidates, allowed_tiers)
+    if not allowed:
+        if blocked:
+            return RetrievedContext("", status="blocked", blocked_contact=blocked_contact(blocked))
+        return RetrievedContext("No relevant context found.", status="empty")
 
     # Order the selected chunks by (source, chunk) for stable, readable context.
     top = sorted(
-        candidates[:n_results],
+        allowed[:n_results],
         key=lambda c: (c.metadata.get("source", ""), c.metadata.get("chunk", 0)),
     )
 
@@ -64,7 +100,7 @@ def retrieve(
             "distance": round(float(cand.distance), 4) if cand.distance is not None else None,
         })
 
-    return RetrievedContext("\n\n".join(formatted), sources)
+    return RetrievedContext("\n\n".join(formatted), sources, status="ok")
 
 
 def retrieve_context(
