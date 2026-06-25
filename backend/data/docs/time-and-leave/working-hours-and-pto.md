@@ -22,7 +22,13 @@ If you cannot work as scheduled, tell your manager as early as possible. Brief, 
 
 ## 3. Paid Time Off Accrual
 
-Full-time employees accrue 20 days of PTO per year, accruing monthly at 1.67 days per completed month of service. PTO is for vacation and personal time and is separate from sick leave and public holidays. Part-time employees accrue PTO on a prorated basis according to their scheduled hours.
+Full-time employees accrue PTO according to tenure bands, accruing monthly in equal portions across the year:
+
+- **Years 0–3:** 20 days per year
+- **Years 4–6:** 24 days per year
+- **Year 7 and beyond:** 28 days per year
+
+PTO is for vacation and personal time and is separate from sick leave and public holidays. The full accrual schedule is in `time-and-leave/pto-accrual-table.csv`. Part-time employees accrue PTO on a prorated basis according to their scheduled hours.
 
 New employees begin accruing PTO from their start date and may book accrued time during probation with manager approval. PTO is shown in the time-off portal, which always reflects your current accrued and booked balances.
 
