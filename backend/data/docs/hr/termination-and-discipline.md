@@ -43,7 +43,7 @@ Gross misconduct — violence, theft, fraud, serious harassment, or a serious sa
 
 ## 6. Notice and Severance
 
-Notice periods follow the contract and applicable law, whichever is greater. Where the company ends employment without cause, it may offer severance in exchange for a signed release of claims. Severance guidance is one week of base pay per completed year of service, subject to a minimum of two weeks and HR discretion based on tenure, role, and circumstances. Severance terms are confidential and are approved by HR and the relevant department head.
+Notice periods follow the contract and applicable law, whichever is greater. Where the company ends employment without cause, it may offer severance in exchange for a signed release of claims. Severance guidance is two weeks of base pay per completed year of service, with a floor of 4 weeks and a cap of 26 weeks; see `hr/severance-guidelines.md` and the `hr/severance-schedule.csv` lookup for the detailed schedule and approvals. Severance terms are confidential and are approved by HR and the relevant department head.
 
 ## 7. References
 

@@ -6,22 +6,26 @@ doc_type: policy
 version: 2025.1
 effective_date: 2025-01-01
 title: Leave Policies (2025 — Superseded)
+status: superseded
 ---
 
 > **This policy has been superseded.** The 2026.1 Leave Policies document (`time-and-leave/leave-policies.md`, effective 2026-01-01) is the current governing policy. This document is retained for historical reference only. In any conflict between this document and the current Leave Policies, the current 2026.1 policy governs.
 
 # Leave Policies — GSVH Corp (2025 Version)
 
-This document covered the specific leave types at GSVH Corp beyond ordinary vacation for the policy year beginning 1 January 2025: sick leave, long-term illness, bereavement leave, jury duty and voting leave, and parental, maternity, and paternity leave. It applied to all employees. Ordinary paid time off accrual in this version was **18 days base per year** (see Section 0 and the PTO Accrual note). The 2026 policy increased the base PTO accrual to 20 days; see `time-and-leave/leave-policies.md` for the current entitlement.
+This document covered the specific leave types at GSVH Corp beyond ordinary vacation for the policy year beginning 1 January 2025: sick leave, long-term illness, bereavement leave, jury duty and voting leave, and parental, maternity, and paternity leave. It applied to all employees. Ordinary paid time off accrual in this version followed 18/22/26-day tenure bands (see Section 0). The 2026 policy moved to 20/24/28-day tenure bands; see `time-and-leave/leave-policies.md` for the current entitlement.
 
 ## 0. PTO Accrual Under This Version (2025)
 
-Under this version of the leave policy (effective 2025-01-01 through 2025-12-31):
-- **Base PTO accrual was 18 days per calendar year**, accruing monthly at 1.5 days per completed month of service.
-- The tenure top-up (+1 day per year after Year 3, to a cap of 26 days) applied under this version at the same rate.
-- Carryover was permitted up to 5 days.
+Under this version of the leave policy (effective 2025-01-01 through 2025-12-31), PTO accrued according to tenure bands:
 
-The 2026.1 policy (`time-and-leave/leave-policies.md`) increased the base to 20 days (monthly accrual 1.67 days) and raised the tenure cap to 28 days. All other leave types in this document are unchanged in the 2026 policy.
+- **Years 0–3:** 18 days per year (monthly accrual 1.5 days per completed month)
+- **Years 4–6:** 22 days per year
+- **Year 7 and beyond:** 26 days per year
+
+Carryover was permitted up to 5 days.
+
+The 2026.1 policy (`time-and-leave/leave-policies.md`) moved to 20/24/28-day tenure bands (from the 18/22/26 bands here). All other leave types in this document are unchanged in the 2026 policy.
 
 ## 1. Sick Leave
 
