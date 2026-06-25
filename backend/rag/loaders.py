@@ -171,6 +171,7 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
     extension = os.path.splitext(filepath)[1].lower()
     if extension == ".pdf":
         docs, frontmatter = _load_pdf_file(filepath)
+        frontmatter = {**_read_sidecar(filepath), **frontmatter}
     elif extension in {".md", ".txt"}:
         docs, frontmatter = _load_text_like(filepath)
     elif extension == ".csv":

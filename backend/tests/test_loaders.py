@@ -53,3 +53,18 @@ def test_csv_row_becomes_labeled_chunk(tmp_path):
     assert "level: L4" in first.page_content
     assert "base_salary_usd: 165000" in first.page_content
     assert first.page_content.startswith("[Table: salary-bands.csv")
+
+
+def test_pdf_reads_region_from_meta_sidecar(tmp_path):
+    from reportlab.pdfgen import canvas
+    pdf_path = tmp_path / "guide.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    c.drawString(72, 720, "Benefits Enrollment Guide. 401(k) 4% match.")
+    c.save()
+    (tmp_path / "guide.pdf.meta.yaml").write_text(
+        "department: benefits\naccess_tier: all\nregion: us\ndoc_type: handbook\ntitle: Benefits (US)\n"
+    )
+    docs = load_document(str(pdf_path), department_fallback="benefits")
+    assert docs and docs[0].metadata["region"] == "us"
+    assert docs[0].metadata["access_tier"] == "all"
+    assert docs[0].metadata["department"] == "benefits"
