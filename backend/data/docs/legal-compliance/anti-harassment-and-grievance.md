@@ -75,7 +75,7 @@ Interim measures are not a finding of guilt. They are protective steps taken to 
 ## 7. Outcomes and Disciplinary Action
 
 At the conclusion of the investigation, the investigator prepares a written findings report. Findings are one of:
-- **Substantiated:** the complaint is supported by the evidence. Disciplinary action follows under `hr/termination-and-discipline.md`, ranging from a formal written warning to termination depending on severity.
+- **Substantiated:** the complaint is supported by the evidence. Disciplinary action follows under GSVH Corp's disciplinary and termination process, ranging from a formal written warning to termination depending on severity.
 - **Partially substantiated:** some elements of the complaint are supported. HR determines the appropriate response.
 - **Unsubstantiated:** the evidence does not support the complaint. The complaint is closed; the subject of the complaint is informed and all interim measures are lifted.
 

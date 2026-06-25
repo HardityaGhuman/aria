@@ -90,4 +90,4 @@ Service accounts (non-human accounts used by applications) are provisioned by IT
 
 If you lose access to a tool unexpectedly, your first step is to check the Okta dashboard — if your Okta account is active, the issue is likely an application-level problem, not an account compromise. Submit an IT service desk ticket for access restoration.
 
-If you suspect your Okta account or any company account has been compromised — for example, you received an unexpected MFA prompt, or you notice activity you did not initiate — contact the IT service desk immediately by phone (number on the IT intranet page) rather than by ticket, and do not wait. Speed is critical; access compromise is an incident under the incident response playbook (`it/incident-response-playbook.md`).
+If you suspect your Okta account or any company account has been compromised — for example, you received an unexpected MFA prompt, or you notice activity you did not initiate — contact the IT service desk immediately by phone (number on the IT intranet page) rather than by ticket, and do not wait. Speed is critical; access compromise is a security incident and IT will coordinate the response process.
