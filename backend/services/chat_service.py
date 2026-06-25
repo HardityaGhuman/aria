@@ -152,10 +152,13 @@ async def _resolve_search_query(message: str, formatted_history: list[dict]) -> 
 
 
 async def _answer_policy_query(
-    message: str, formatted_history: list[dict], allowed_tiers: list[str] | None
+    message: str,
+    formatted_history: list[dict],
+    allowed_tiers: list[str] | None,
+    allowed_regions: list[str] | None = None,
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
-    retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers)
+    retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
     if not retrieved.sources:
         return ChatResult(NO_RESULTS_MESSAGE, "", [])
 
@@ -175,12 +178,17 @@ async def _answer_policy_query(
 
 
 async def generate_chat_reply(
-    session_id: str, message: str, allowed_tiers: list[str] | None = None
+    session_id: str,
+    message: str,
+    allowed_tiers: list[str] | None = None,
+    allowed_regions: list[str] | None = None,
 ) -> ChatResult:
     """Full chat flow: prepare history, classify, answer, persist the exchange.
 
     ``allowed_tiers`` is the RBAC gate: only documents in these access tiers are
     retrievable for this caller. The route derives it from the user's role.
+    ``allowed_regions`` restricts retrieval to globally-visible docs and the
+    caller's home region. The route derives it from the user's region claim.
     """
     if not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
@@ -206,7 +214,7 @@ async def generate_chat_reply(
         )
         result = ChatResult(reply, "", [])
     else:
-        result = await _answer_policy_query(message, formatted_history, allowed_tiers)
+        result = await _answer_policy_query(message, formatted_history, allowed_tiers, allowed_regions)
 
     try:
         append_exchange(session_id, message, result.reply)

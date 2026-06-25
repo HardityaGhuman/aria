@@ -31,13 +31,26 @@ def _chunk_id(metadata: dict) -> str:
     return f"{metadata.get('source')}:{metadata.get('chunk')}"
 
 
-def _vector_where(allowed_tiers: list[str] | None) -> dict:
-    """Build the Chroma ``where`` clause: drop structural chunks, and (when a
-    role's tiers are given) restrict to those access tiers. ``allowed_tiers=None``
-    means no tier restriction — used by the offline eval harness."""
-    filters: list[dict] = [{"content_type": {"$nin": _EXCLUDED_TYPES}}]
+def _vector_where(
+    allowed_tiers: list[str] | None,
+    allowed_regions: list[str] | None = None,
+) -> dict:
+    """Build the Chroma ``where`` clause: drop structural chunks, always
+    exclude superseded documents, and (when provided) restrict to the caller's
+    access tiers and/or regions.
+
+    ``allowed_tiers=None`` / ``allowed_regions=None`` means no restriction on
+    that axis — used by the offline eval harness.
+    """
+    filters: list[dict] = [
+        {"content_type": {"$nin": _EXCLUDED_TYPES}},
+        # Superseded docs are never surfaced regardless of role or region.
+        {"status": {"$ne": "superseded"}},
+    ]
     if allowed_tiers is not None:
         filters.append({"access_tier": {"$in": allowed_tiers}})
+    if allowed_regions is not None:
+        filters.append({"region": {"$in": allowed_regions}})
     return filters[0] if len(filters) == 1 else {"$and": filters}
 
 
@@ -48,8 +61,23 @@ def _tier_allowed(meta: dict, allowed_tiers: list[str] | None) -> bool:
     return meta.get("access_tier") in allowed_tiers
 
 
+def _region_allowed(meta: dict, allowed_regions: list[str] | None) -> bool:
+    """Region gate for the BM25 path: global docs are visible to all regions."""
+    if allowed_regions is None:
+        return True
+    return meta.get("region") in allowed_regions
+
+
+def _status_active(meta: dict) -> bool:
+    """Returns False only for documents explicitly marked as superseded."""
+    return meta.get("status") != "superseded"
+
+
 def vector_search(
-    query: str, allowed_tiers: list[str] | None = None, pool: int = BM25_CANDIDATE_POOL
+    query: str,
+    allowed_tiers: list[str] | None = None,
+    pool: int = BM25_CANDIDATE_POOL,
+    allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
     """Dense semantic search. Embeds the query explicitly with the same model
     used for the documents (Chroma's default embedder would diverge silently if
@@ -59,7 +87,7 @@ def vector_search(
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=pool,
-        where=_vector_where(allowed_tiers),
+        where=_vector_where(allowed_tiers, allowed_regions),
         include=["documents", "metadatas", "distances"],
     )
 
@@ -75,7 +103,10 @@ def vector_search(
 
 
 def bm25_search(
-    query: str, allowed_tiers: list[str] | None = None, pool: int = BM25_CANDIDATE_POOL
+    query: str,
+    allowed_tiers: list[str] | None = None,
+    pool: int = BM25_CANDIDATE_POOL,
+    allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
     """Lexical BM25 keyword search with a relative score floor."""
     index, corpus, metadata = get_bm25_index()
@@ -93,11 +124,16 @@ def bm25_search(
         if score <= 0 or score < min_score:
             continue
         meta = metadata[idx]
-        # The BM25 index spans the whole corpus, so apply the structural and
-        # access-tier filters here that the vector path applies via ``where``.
+        # The BM25 index spans the whole corpus, so apply the same filters here
+        # that the vector path applies via ``where``: structural exclusion,
+        # superseded status, access tier, and region.
         if meta.get("content_type") in _EXCLUDED_TYPES:
             continue
+        if not _status_active(meta):
+            continue
         if not _tier_allowed(meta, allowed_tiers):
+            continue
+        if not _region_allowed(meta, allowed_regions):
             continue
         candidates.append(Candidate(_chunk_id(meta), corpus[idx], meta, score=score))
         if len(candidates) >= pool:
@@ -106,11 +142,14 @@ def bm25_search(
 
 
 def hybrid_search(
-    query: str, allowed_tiers: list[str] | None = None, pool: int = BM25_CANDIDATE_POOL
+    query: str,
+    allowed_tiers: list[str] | None = None,
+    pool: int = BM25_CANDIDATE_POOL,
+    allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
     """Fuse vector + BM25 rankings with Reciprocal Rank Fusion."""
-    vec = vector_search(query, allowed_tiers, pool)
-    bm = bm25_search(query, allowed_tiers, pool)
+    vec = vector_search(query, allowed_tiers, pool, allowed_regions)
+    bm = bm25_search(query, allowed_tiers, pool, allowed_regions)
 
     vec_ids = [c.chunk_id for c in vec]
     bm_ids = [c.chunk_id for c in bm]

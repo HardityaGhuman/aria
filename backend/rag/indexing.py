@@ -17,6 +17,7 @@ from backend.rag.bm25 import invalidate_bm25
 from backend.rag.chunking import CHUNK_VERSION, chunk_documents
 from backend.rag.loaders import (
     DEFAULT_ACCESS_TIER,
+    DEFAULT_STATUS,
     SUPPORTED_EXTENSIONS,
     file_hash,
     load_document,
@@ -119,6 +120,7 @@ def initialize_vectorstore() -> dict:
         doc_type = pages[0].metadata.get("doc_type", "policy")
         version = pages[0].metadata.get("version", "2026.1")
         effective_date = pages[0].metadata.get("effective_date", "2026-01-01")
+        status = pages[0].metadata.get("status", DEFAULT_STATUS)
 
         safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", rel_path)
         chunk_ids = [f"{safe_name}:{source_hash[:12]}:{i}" for i in range(len(chunk_docs))]
@@ -139,6 +141,7 @@ def initialize_vectorstore() -> dict:
                 "doc_type": doc_type,
                 "version": version,
                 "effective_date": effective_date,
+                "status": status,
             }
             for i, doc in enumerate(chunk_docs)
         ]

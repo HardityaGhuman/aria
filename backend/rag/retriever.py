@@ -15,6 +15,7 @@ def retrieve(
     strategy: str = None,
     n_results: int = None,
     allowed_tiers: list[str] | None = None,
+    allowed_regions: list[str] | None = None,
 ) -> RetrievedContext:
     """Retrieve context for ``query`` using the named strategy.
 
@@ -24,6 +25,8 @@ def retrieve(
         allowed_tiers: access tiers the caller may see (RBAC). ``None`` means no
             restriction — used by the offline eval harness; live chat always
             passes the caller's role tiers.
+        allowed_regions: regions the caller may see. ``None`` means no restriction
+            — used by the offline eval harness; live chat passes the user's region.
     """
     strategy = strategy or RETRIEVAL_STRATEGY
     if n_results is None:
@@ -36,7 +39,7 @@ def retrieve(
     if get_collection().count() == 0:
         return RetrievedContext("No company policy documents have been indexed yet.")
 
-    candidates = STRATEGIES[strategy](query, allowed_tiers)
+    candidates = STRATEGIES[strategy](query, allowed_tiers, allowed_regions=allowed_regions)
     if not candidates:
         return RetrievedContext("No relevant context found.")
 
@@ -65,7 +68,10 @@ def retrieve(
 
 
 def retrieve_context(
-    query: str, n_results: int = None, allowed_tiers: list[str] | None = None
+    query: str,
+    n_results: int = None,
+    allowed_tiers: list[str] | None = None,
+    allowed_regions: list[str] | None = None,
 ) -> RetrievedContext:
     """Backwards-compatible entry point using the configured default strategy."""
-    return retrieve(query, n_results=n_results, allowed_tiers=allowed_tiers)
+    return retrieve(query, n_results=n_results, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)

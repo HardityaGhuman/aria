@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.responses import FileResponse
 
-from backend.core.auth import get_current_user, tiers_for_role
+from backend.core.auth import get_current_user, regions_for_user, tiers_for_role
 from backend.core.chat_memory import (
     ChatMemoryError,
     clear_history as clear_session_history,
@@ -35,7 +35,10 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     The user's role gates which document tiers are retrievable (RBAC).
     """
     result = await generate_chat_reply(
-        req.session_id, req.message, allowed_tiers=tiers_for_role(user["role"])
+        req.session_id,
+        req.message,
+        allowed_tiers=tiers_for_role(user["role"]),
+        allowed_regions=regions_for_user(user["region"]),
     )
     return ChatResponse(
         session_id=req.session_id,

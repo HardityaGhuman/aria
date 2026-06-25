@@ -19,7 +19,7 @@ from backend.rag.loaders import clean_text
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
 # Bump to force a one-time reindex when chunking logic changes.
-CHUNK_VERSION = "2026-06-24-axes-tabular-v8"
+CHUNK_VERSION = "2026-06-25-status-region-v9"
 # Sections shorter than this are treated as heading/intro blurbs ("In this
 # section we explain...") and folded forward into the next real section, so they
 # don't survive as low-content chunks that win retrieval slots without payload.
