@@ -33,6 +33,13 @@ QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "t
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
+# Short-lived access token (minutes) + long-lived refresh token (days). The SPA
+# holds the access token in memory and silently refreshes via the httpOnly cookie.
+ACCESS_TOKEN_TTL_MIN = int(os.getenv("ACCESS_TOKEN_TTL_MIN", "30"))
+REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "14"))
+# CORS + refresh-cookie. Locked to the React dev origin by default; override in prod.
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
 
 
 def require_jwt_secret() -> str:

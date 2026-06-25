@@ -34,7 +34,7 @@ def test_decode_rejects_tampered_token():
 
 
 def test_decode_rejects_expired_token():
-    token = auth.create_access_token({"id": 1, "role": "employee"}, expires_in_hours=-1)
+    token = auth.create_access_token({"id": 1, "role": "employee"}, expires_in_min=-1)
     with pytest.raises(auth.AuthError):
         auth.decode_token(token)
 

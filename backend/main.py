@@ -12,7 +12,8 @@ from backend.routes.chat import router as chat_router
 from backend.routes.auth import router as auth_router
 from backend.routes.admin import router as admin_router
 from backend.core.chat_memory import initialize_chat_memory
-from backend.core.config import require_jwt_secret
+from backend.core.config import FRONTEND_ORIGIN, require_jwt_secret
+from backend.core.tokens import initialize_tokens_table
 from backend.core.users import initialize_users_table
 from backend.core.logging import get_logger, setup_logging
 from backend.rag import get_collection
@@ -29,7 +30,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[FRONTEND_ORIGIN],
+    allow_credentials=True,  # required for the refresh cookie
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,7 +49,8 @@ async def startup_event():
     logger.info("Initializing chat memory and users table...")
     initialize_chat_memory()
     initialize_users_table()
-    logger.info("Chat memory and users table ready.")
+    initialize_tokens_table()
+    logger.info("Chat memory, users, and refresh-token tables ready.")
 
     chunk_count = get_collection().count()
     if chunk_count == 0:
