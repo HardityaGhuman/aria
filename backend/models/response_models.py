@@ -35,6 +35,23 @@ class ChatResponse(BaseModel):
     status: str = Field(..., description="ok | no_results | blocked | refused.")
 
 
+# --- Sessions ---
+
+
+class SessionInfo(BaseModel):
+    """One conversation owned by the caller (list item for the sidebar)."""
+
+    session_id: str = Field(..., description="Conversation id.")
+    title: str | None = Field(None, description="User-set title, if any.")
+    updated_at: str | None = Field(None, description="Last activity (ISO 8601).")
+
+
+class CreateSessionResponse(BaseModel):
+    """Response for ``POST /chat/sessions``."""
+
+    session_id: str = Field(..., description="The newly created conversation id.")
+
+
 # --- Admin document lifecycle ---
 
 
