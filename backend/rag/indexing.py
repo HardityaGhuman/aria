@@ -48,6 +48,18 @@ def _iter_document_files(root: str):
             yield filepath, rel_path, department
 
 
+def delete_document_chunks(rel_path: str) -> int:
+    """Delete all Chroma chunks whose ``source`` matches ``rel_path``. Returns the
+    number of chunks removed and invalidates the BM25 cache so it rebuilds."""
+    collection = get_collection()
+    existing = collection.get(where={"source": rel_path})
+    ids = existing.get("ids", []) or []
+    if ids:
+        collection.delete(ids=ids)
+        invalidate_bm25()
+    return len(ids)
+
+
 def list_policy_documents() -> list[dict]:
     if not os.path.exists(DOCS_PATH):
         return []

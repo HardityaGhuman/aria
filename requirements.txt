@@ -18,6 +18,8 @@ langchain-text-splitters>=0.3.0
 # Auth
 bcrypt>=4.1.0
 PyJWT>=2.8.0
+# Multipart form parsing for admin document upload (FastAPI File/Form)
+python-multipart>=0.0.9
 
 # Tabular corpus ingestion (.xlsx loader)
 openpyxl>=3.1.0
