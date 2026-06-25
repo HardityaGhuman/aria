@@ -7,18 +7,32 @@ the frontend and self-document the Swagger UI.
 from pydantic import BaseModel, Field
 
 
-class ChatResponse(BaseModel):
-    """Response for ``POST /chat``."""
+class Source(BaseModel):
+    """One cited chunk, in the frozen shape the React client binds to."""
 
-    session_id: str = Field(..., description="The conversation id this reply belongs to.")
-    reply: str = Field(..., description="The assistant's answer.")
-    context_used: str = Field(
-        ..., description="Retrieved context behind the answer (empty when not grounded)."
-    )
-    sources: list[dict] = Field(
+    document_id: str = Field(..., description="Stable doc id = path relative to docs/ (e.g. hr/x.md).")
+    file: str = Field(..., description="Human-facing filename (basename of document_id).")
+    section: str | None = Field(None, description="Parent section heading, when known.")
+    source_type: str | None = Field(None, description="Access tier the chunk came from (all/manager/hr_only).")
+
+
+class ChatResponse(BaseModel):
+    """Standardized envelope for ``POST /chat``.
+
+    ``status`` lets the client distinguish a grounded answer from a graceful
+    non-answer without string-matching the prose: ``ok`` (answered),
+    ``no_results`` (nothing found), ``blocked`` (RBAC-restricted), ``refused``
+    (out of scope).
+    """
+
+    answer: str = Field(..., description="The assistant's answer text.")
+    sources: list[Source] = Field(
         default_factory=list,
-        description="Per-chunk source metadata for the cited documents.",
+        description="Cited documents behind the answer (empty when not grounded).",
     )
+    latency_ms: int = Field(..., description="Server-side time to produce the answer.")
+    session_id: str = Field(..., description="The conversation id this reply belongs to.")
+    status: str = Field(..., description="ok | no_results | blocked | refused.")
 
 
 # --- Admin document lifecycle ---
