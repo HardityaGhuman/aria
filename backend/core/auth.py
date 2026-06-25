@@ -42,6 +42,17 @@ def tiers_for_role(role: str | None) -> list[str]:
     return _ROLE_TIERS.get(role, _DEFAULT_TIERS)
 
 
+# --- Region filtering ---
+# global docs are visible to every region; region-specific docs are visible
+# only to users whose home region matches. Applies to all roles including HR.
+_DEFAULT_REGION = "us"
+
+
+def regions_for_user(region: str | None) -> list[str]:
+    """Doc regions a user may retrieve: global is universal, plus their home region."""
+    return ["global", region or _DEFAULT_REGION]
+
+
 def hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt (random per-password salt)."""
     return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -53,12 +64,13 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user: dict, expires_in_hours: int | None = None) -> str:
-    """Sign an HS256 JWT carrying the user's id (``sub``), role, and expiry."""
+    """Sign an HS256 JWT carrying the user's id (``sub``), role, region, and expiry."""
     hours = JWT_EXPIRY_HOURS if expires_in_hours is None else expires_in_hours
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user["id"]),
         "role": user["role"],
+        "region": user.get("region", _DEFAULT_REGION),
         "exp": now + timedelta(hours=hours),
         "iat": now,
     }
@@ -96,7 +108,11 @@ def get_current_user(
         )
     try:
         claims = decode_token(credentials.credentials)
-        user = {"id": int(claims["sub"]), "role": claims["role"]}
+        user = {
+            "id": int(claims["sub"]),
+            "role": claims["role"],
+            "region": claims.get("region", _DEFAULT_REGION),
+        }
     except (AuthError, KeyError, ValueError, TypeError) as exc:
         # AuthError = bad signature/expiry; the rest = a token whose payload is
         # missing/malformed sub/role. All are "not authenticated", never a 500.
