@@ -62,6 +62,9 @@ class ChatResult:
     reply: str
     context_used: str
     sources: list[dict]
+    # ok | no_results | blocked | refused — surfaced in the response envelope so
+    # the client can branch on outcome without string-matching the prose.
+    status: str = "ok"
 
 
 def _is_refusal(reply: str) -> bool:
@@ -165,9 +168,9 @@ async def _answer_policy_query(
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
     if retrieved.status == "blocked":
         contact = retrieved.blocked_contact or "HR"
-        return ChatResult(CONFIDENTIAL_MESSAGE.format(contact=contact), "", [])
+        return ChatResult(CONFIDENTIAL_MESSAGE.format(contact=contact), "", [], status="blocked")
     if not retrieved.sources:
-        return ChatResult(NO_RESULTS_MESSAGE, "", [])
+        return ChatResult(NO_RESULTS_MESSAGE, "", [], status="no_results")
 
     reply = await _run_blocking(
         get_llm_response,
@@ -179,9 +182,11 @@ async def _answer_policy_query(
 
     # A refusal or "not enough info" reply isn't grounded in the retrieved
     # chunks, so drop the context and sources.
-    if _is_insufficient_policy_answer(reply) or _is_refusal(reply):
-        return ChatResult(reply, "", [])
-    return ChatResult(reply, retrieved.text, retrieved.sources)
+    if _is_refusal(reply):
+        return ChatResult(reply, "", [], status="refused")
+    if _is_insufficient_policy_answer(reply):
+        return ChatResult(reply, "", [], status="no_results")
+    return ChatResult(reply, retrieved.text, retrieved.sources, status="ok")
 
 
 async def generate_chat_reply(
@@ -211,7 +216,7 @@ async def generate_chat_reply(
     )
 
     if classification == "out_of_scope":
-        result = ChatResult(REFUSAL_MESSAGE, "", [])
+        result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
     elif classification == "meta":
         reply = await _run_blocking(
             get_meta_response,
@@ -219,7 +224,7 @@ async def generate_chat_reply(
             user_message=message,
             history=formatted_history,
         )
-        result = ChatResult(reply, "", [])
+        result = ChatResult(reply, "", [], status="ok")
     else:
         result = await _answer_policy_query(message, formatted_history, allowed_tiers, allowed_regions)
 

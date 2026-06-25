@@ -116,18 +116,12 @@ def render_retrieval(sources, context):
     if not sources:
         return
     # One-line summary of the distinct documents behind the answer.
-    st.caption("Sources: " + ", ".join(sorted({s["source"] for s in sources})))
+    st.caption("Sources: " + ", ".join(sorted({s["document_id"] for s in sources})))
     with st.expander(f"Retrieved {len(sources)} passage(s) — inspect"):
         for s in sources:
-            dept = s.get("department") or "—"
-            tier = s.get("access_tier") or "—"
+            tier = s.get("source_type") or "—"
             section = s.get("section")
-            distance = s.get("distance")
-            dist_str = f"  ·  dist `{distance}`" if distance is not None else ""
-            st.markdown(
-                f"**{s.get('source')}**  ·  dept `{dept}`  ·  tier `{tier}`"
-                f"  ·  chunk `{s.get('chunk')}`{dist_str}"
-            )
+            st.markdown(f"**{s.get('file')}**  ·  `{s.get('document_id')}`  ·  tier `{tier}`")
             if section:
                 st.caption(f"§ {section}")
         if context:
@@ -160,13 +154,16 @@ def call_chat(message: str):
         return "The server is temporarily unavailable. Try again shortly.", "", []
     if not resp.ok:
         try:
-            detail = resp.json().get("detail", resp.reason)
+            body = resp.json()
+            # Uniform envelope is {"error": {"message": ...}}; HTTPException is {"detail": ...}.
+            detail = body.get("error", {}).get("message") or body.get("detail") or resp.reason
         except Exception:
             detail = resp.reason
         return f"Backend error: {detail}", "", []
 
     data = resp.json()
-    return data["reply"], data.get("context_used", ""), data.get("sources", [])
+    # Envelope: {answer, sources, latency_ms, session_id, status}. No raw context block.
+    return data["answer"], "", data.get("sources", [])
 
 
 # ── Auth gate ────────────────────────────────────────────────────────
