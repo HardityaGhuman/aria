@@ -50,7 +50,7 @@ Every GSVH Corp employee who handles data is personally responsible for:
 - Classifying data they create at the correct level and applying appropriate access controls.
 - Not sharing Confidential or Restricted data with anyone outside the company (or outside the authorised circle internally) without Legal approval.
 - Not copying Restricted or Confidential data to personal devices, personal cloud storage (Google Drive personal, Dropbox personal, etc.), or removable media, unless explicitly authorized.
-- Reporting a suspected or confirmed data breach to IT immediately — do not attempt to investigate or remediate a breach yourself. See `it/incident-response-playbook.md` for the breach response process.
+- Reporting a suspected or confirmed data breach to IT immediately — do not attempt to investigate or remediate a breach yourself. Contact the IT service desk immediately; the breach response process is coordinated by IT and Security.
 - Completing the mandatory annual data protection training in the LMS.
 
 Violations of this policy — sharing data without authorisation, circumventing access controls, failing to report a breach — are conduct violations subject to disciplinary action up to and including termination.
@@ -99,4 +99,4 @@ When engaging a vendor who will process personal data on GSVH Corp's behalf, a *
 
 ## 10. Contact
 
-For data protection questions, access requests, or DPIA guidance, contact `privacy@gsvhcorp.com`. For suspected breaches, contact IT immediately (see `it/incident-response-playbook.md`). GSVH Corp's designated Data Protection Officer (DPO) for GDPR purposes is the General Counsel; contact details are on the Legal intranet page.
+For data protection questions, access requests, or DPIA guidance, contact `privacy@gsvhcorp.com`. For suspected breaches, contact the IT service desk immediately by phone (number on the IT intranet page). GSVH Corp's designated Data Protection Officer (DPO) for GDPR purposes is the General Counsel; contact details are on the Legal intranet page.

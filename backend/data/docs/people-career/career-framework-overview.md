@@ -10,7 +10,7 @@ title: Career Framework Overview
 
 # Career Framework Overview — GSVH Corp
 
-This document explains GSVH Corp's career framework: the level structure, the criteria for each level, the promotion process, and how the framework connects to compensation. It applies to all employees globally. The engineering-specific competency matrix is tabulated in `people-career/engineering-leveling-matrix.csv`; this document is the prose companion that explains the logic behind the levels.
+This document explains GSVH Corp's career framework: the level structure, the criteria for each level, the promotion process, and how the framework connects to compensation. It applies to all employees globally. An engineering-specific competency matrix exists with concrete behavioural indicators by level; this document is the prose companion that explains the logic behind the levels. Access to the detailed matrix is available to managers and HR — speak to your manager or HR Business Partner if you need level-specific guidance.
 
 ## 1. Why a Career Framework
 
@@ -36,7 +36,7 @@ Most career growth at GSVH Corp happens in the L1–L5 range. L6 and L7 represen
 
 ## 3. Level Criteria (All Disciplines)
 
-Each level is defined along four dimensions. The discipline-specific matrices (e.g., `people-career/engineering-leveling-matrix.csv`) provide concrete behavioural indicators; these cross-cutting criteria apply to all roles.
+Each level is defined along four dimensions. Discipline-specific matrices maintained by HR and your management team provide concrete behavioural indicators; these cross-cutting criteria apply to all roles.
 
 ### Scope and Impact
 
@@ -93,7 +93,7 @@ Each level has an approved compensation band defined by Finance and HR, based on
 
 Band details are confidential to HR and Finance. Employees who believe their compensation is not consistent with their level and contribution should raise this with their manager or HR Business Partner.
 
-For reference, `finance/salary-bands.csv` (HR-access only) tabulates the approved band ranges by level and region.
+Approved band ranges by level and region are maintained by HR and Finance; contact your HR Business Partner for your band.
 
 ## 6. Frequently Asked Questions
 
@@ -101,4 +101,4 @@ For reference, `finance/salary-bands.csv` (HR-access only) tabulates the approve
 
 **What if my manager disagrees with my self-assessment?** Calibration is the right place to resolve disagreements. If you believe your calibration outcome was unfair, discuss it with your manager first, then with the HR Business Partner. The promotion process is designed to be visible enough that single-manager bias is surface-able.
 
-**Does GSVH Corp have a "performance out" for people who stay at a level too long?** No — staying at the same level is not itself a problem. GSVH Corp does not have a mandatory promotion timeline or a "grow or go" policy for individual contributors. Performance issues are addressed through the PIP process (`hr/performance-improvement-plan.md`), not through arbitrary level expectations.
+**Does GSVH Corp have a "performance out" for people who stay at a level too long?** No — staying at the same level is not itself a problem. GSVH Corp does not have a mandatory promotion timeline or a "grow or go" policy for individual contributors. Performance issues are addressed through the performance improvement process, not through arbitrary level expectations.
