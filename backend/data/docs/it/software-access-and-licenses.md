@@ -58,7 +58,7 @@ Standard access requests are fulfilled within **2 business days** of manager app
 GSVH Corp takes software license compliance seriously. Using software beyond the licensed scope — for example, sharing a single-seat license between two users, installing software beyond the licensed device count, or using a personal license for commercial work — exposes the company to legal liability.
 
 Employees must:
-- Use only software that has been procured through the IT software catalogue or the procurement process in `finance/procurement-and-vendors.md`.
+- Use only software that has been procured through the IT software catalogue or the company procurement process.
 - Not install unlicensed software on company devices.
 - Not use personal subscriptions (e.g., a personal GitHub Copilot subscription) for GSVH Corp work without IT approval, because the license terms may not permit commercial use.
 - Report any software use that appears to exceed the licensed scope to the IT service desk.
