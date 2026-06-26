@@ -18,7 +18,9 @@ filtering**. It is the foundation for a larger serverless build-out — see
 |-----------|------------|
 | LLM | LiteLLM (provider-agnostic — Groq, Gemini, OpenAI, Anthropic, …) |
 | Backend | FastAPI |
-| Auth | JWT (PyJWT, HS256) + bcrypt; 3-tier RBAC (employee / manager / HR) + per-user region (US / India) |
+| Auth | JWT (PyJWT, HS256) + bcrypt; short access token + rotating refresh token (HttpOnly cookie); 3-tier RBAC (employee / manager / HR) + per-user region (US / India) |
+| Streaming | Server-Sent Events (`sse-starlette`) for token-by-token answers |
+| Rate limiting | Per-user / per-IP at the API edge (`slowapi`) |
 | Frontend | Streamlit (throwaway; a React frontend is planned) |
 | Vector DB | ChromaDB (cosine distance, via `langchain-chroma`) |
 | Hybrid retrieval | BM25 (`rank_bm25`) + vector search, fused with Reciprocal Rank Fusion |
@@ -103,8 +105,12 @@ instead of a generic miss.
    returns the confidential message.
 6. The LLM answers from the retrieved context + recent history, constrained by
    the system prompt and a refusal guardrail (cites only documents in context).
-7. Conversation history is persisted in PostgreSQL per session; when it exceeds a
-   token budget, older messages are summarized and pruned.
+   The caller's saved **preferences** (tone / length / language) are injected into
+   the answer prompt. Answers can be returned whole (`POST /chat`) or streamed
+   token-by-token over SSE (`POST /chat/stream`).
+7. Conversation history is persisted in PostgreSQL per session; sessions are
+   **owned by the user** (listable/renamable/deletable, owner-checked). When
+   history exceeds a token budget, older messages are summarized and pruned.
 
 ```mermaid
 flowchart TD
@@ -166,6 +172,16 @@ MAX_HISTORY_TOKENS=2000
 # Auth (required) — generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
 JWT_SECRET=your_long_random_secret
 JWT_EXPIRY_HOURS=8
+ACCESS_TOKEN_TTL_MIN=30          # access-token lifetime
+REFRESH_TOKEN_TTL_DAYS=14        # refresh-token lifetime
+COOKIE_SECURE=false              # true in prod (https); false for local http dev
+FRONTEND_ORIGIN=http://localhost:5173   # CORS + /auth/refresh CSRF origin check
+
+# Rate limits + LLM resilience
+RATE_LIMIT_CHAT=30/minute
+RATE_LIMIT_LOGIN=10/minute
+LLM_MAX_RETRIES=2
+LLM_CONTEXT_TOKEN_BUDGET=6000
 
 # Retrieval tuning
 RETRIEVAL_TOP_K=6
@@ -208,7 +224,14 @@ Seeded accounts (all password `Test1234!`): `hr@gsvh.test` (hr, us),
 | `DATABASE_URL` | `postgresql://localhost:5432/company_chatbot` | PostgreSQL (chat memory + users) |
 | `MAX_HISTORY_TOKENS` | `2000` | Token budget before history is summarized |
 | `JWT_SECRET` | *(required)* | HS256 signing secret; server refuses to boot if unset |
-| `JWT_EXPIRY_HOURS` | `8` | Access-token lifetime |
+| `ACCESS_TOKEN_TTL_MIN` | `30` | Access-token lifetime (minutes) |
+| `REFRESH_TOKEN_TTL_DAYS` | `14` | Refresh-token lifetime (days) |
+| `COOKIE_SECURE` | `true` | Mark the refresh cookie `Secure`; set `false` for local http dev |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed browser origin (CORS + refresh CSRF check) |
+| `RATE_LIMIT_CHAT` | `30/minute` | Per-user/IP limit on `/chat` + `/chat/stream` |
+| `RATE_LIMIT_LOGIN` | `10/minute` | Per-IP limit on `/auth/login` |
+| `LLM_MAX_RETRIES` | `2` | Transient-error retries (exponential backoff) |
+| `LLM_CONTEXT_TOKEN_BUDGET` | `6000` | Retrieved context is truncated to this token budget |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence-transformers embedding model |
 | `EMBEDDINGS_LOCAL_ONLY` | `true` | Use only locally cached embedding weights |
 | `RETRIEVAL_STRATEGY` | `hybrid` | `vector`, `bm25`, or `hybrid` |
@@ -235,17 +258,62 @@ Seeded accounts (all password `Test1234!`): `hr@gsvh.test` (hr, us),
 
 ## API
 
-All routes except `/health` and `/auth/login` require `Authorization: Bearer <token>`.
+Protected routes require `Authorization: Bearer <access_token>`. Auth uses a
+**short-lived access token** (returned by `/auth/login`, ~30 min) plus a
+**long-lived refresh token** stored in an `HttpOnly` cookie scoped to
+`/auth/refresh`; the client silently rotates the access token via `/auth/refresh`.
+The full typed contract is frozen at [`docs/api/openapi.json`](docs/api/openapi.json)
+(also live at `/docs`).
+
+**Auth**
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `POST` | `/auth/login` | none | Exchange email + password for a JWT |
-| `GET` | `/auth/me` | any user | Current user `{id, role, region}` |
-| `POST` | `/chat` | any user | Ask a question; returns answer + context + sources (tier + region filtered) |
-| `GET` | `/chat/history/{session_id}` | any user | Get persisted session chat history |
-| `DELETE` | `/chat/history/{session_id}` | any user | Clear persisted session chat history |
+| `POST` | `/auth/login` | none | Email + password → access token (+ sets refresh cookie) |
+| `POST` | `/auth/refresh` | refresh cookie | Rotate: revoke old refresh, issue a fresh access + refresh |
+| `POST` | `/auth/logout` | refresh cookie | Revoke the refresh token and clear the cookie |
+| `GET` | `/auth/me` | bearer | Current user `{id, role, region}` |
+
+**Chat**
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/chat` | bearer | Ask a question → response envelope (tier + region filtered) |
+| `POST` | `/chat/stream` | bearer | Same as `/chat` but streams tokens over SSE (`token`/`sources`/`done`/`error`) |
+| `GET` | `/chat/sessions` | bearer | List the caller's own conversations |
+| `POST` | `/chat/sessions` | bearer | Create a new conversation |
+| `PATCH` | `/chat/sessions/{id}` | bearer (owner) | Rename a conversation |
+| `DELETE` | `/chat/sessions/{id}` | bearer (owner) | Delete a conversation + its messages |
+| `GET` | `/chat/history/{session_id}` | bearer | Get persisted session chat history |
+| `DELETE` | `/chat/history/{session_id}` | bearer | Clear persisted session chat history |
+
+**Me / Admin / Ops**
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/me/preferences` | bearer | Read the caller's tone/length/language preferences |
+| `PUT` | `/me/preferences` | bearer | Upsert the caller's preferences (injected into the prompt) |
+| `POST` | `/admin/documents/upload` | HR only | Upload a document (multipart); ingestion runs in the background |
+| `GET` | `/admin/documents` | HR only | List corpus documents + per-document ingestion status |
+| `GET` | `/admin/documents/{id}/status` | HR only | One document's status (`queued`/`processing`/`indexed`/`failed`) |
+| `DELETE` | `/admin/documents/{id}` | HR only | Remove a document (file + its vector chunks) |
 | `POST` | `/admin/reindex` | HR only | Rebuild the vector index from the corpus |
 | `GET` | `/health` | none | Liveness check |
+
+**Response envelope** (`POST /chat`, and the SSE `done` event):
+
+```json
+{
+  "answer": "Full-time employees accrue 20, 24, or 28 PTO days by tenure…",
+  "sources": [{ "document_id": "time-and-leave/working-hours-and-pto.md", "file": "working-hours-and-pto.md", "section": "PTO", "source_type": "all" }],
+  "latency_ms": 1840,
+  "session_id": "abc-123",
+  "status": "ok"
+}
+```
+
+`status ∈ {ok, no_results, blocked, refused}`. Errors use a uniform body:
+`{"error": {"code": "...", "message": "...", "detail": null}}`.
 
 ## Evaluation
 
@@ -266,14 +334,18 @@ step-by-step in [`PROGRESS.md`](PROGRESS.md). In short:
 
 0. Multi-source, multi-format corpus + ingestion — ✅
 1. JWT auth + 3-tier RBAC + region filtering — ✅
-2. Security & resilience (prompt-injection, rate limiting, graceful LLM errors)
-3. User preferences in PostgreSQL
-4. Retrieval-quality inspection (eval harness; structural fixes already in)
-5. Observability (response envelope, telemetry, metrics)
-6. Admin document lifecycle (upload / status / delete / reindex)
-7. React frontend
+2. Security & resilience (rate limiting, LLM retry/backoff, context truncation, CORS lockdown) — ✅
+3. User preferences in PostgreSQL — ✅
+4. Retrieval-quality inspection (eval harness; structural fixes already in) — 🔄
+5. Observability — 🔄 (response envelope ✅; telemetry + metrics pending)
+6. Admin document lifecycle (upload / status / delete / reindex) — ✅
+7. React frontend — ⬜ NEXT (binds the frozen `docs/api/openapi.json`)
 8. pgvector migration + Cloud Run deploy
 9. Background workers / event-based ingestion
+
+Also landed alongside the backend-standardization pass (prep for React):
+refresh-token rotation + HttpOnly cookie, SSE streaming, user-owned sessions
+(`SessionStore` seam, Redis-ready), uniform error envelope, and a frozen OpenAPI.
 
 ## Notes
 
