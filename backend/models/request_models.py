@@ -21,3 +21,11 @@ class RenameSessionRequest(BaseModel):
     """Body for ``PATCH /chat/sessions/{session_id}``."""
 
     title: str = Field(..., min_length=1, max_length=200, description="New session title.")
+
+
+class UpdatePreferencesRequest(BaseModel):
+    """Body for ``PUT /me/preferences``. Any field may be omitted/null to clear it."""
+
+    tone: str | None = Field(None, max_length=50, description="e.g. friendly, formal, concise.")
+    response_length: str | None = Field(None, max_length=50, description="short | medium | long.")
+    language: str | None = Field(None, max_length=50, description="Preferred answer language.")

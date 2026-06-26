@@ -35,6 +35,11 @@ from backend.core.llm import (
     summarize_history,
 )
 from backend.core.logging import get_logger
+from backend.core.preferences import (
+    PreferencesError,
+    format_preferences,
+    get_preferences,
+)
 from backend.rag import retrieve_context, rewrite_query
 
 logger = get_logger(__name__)
@@ -147,6 +152,31 @@ def _prepare_history(session_id: str) -> list[dict]:
     return formatted_history
 
 
+def _preferences_note(owner_user_id: int | None) -> str | None:
+    """Build the prompt block for a user's durable preferences, or None.
+
+    Best-effort: a preferences DB hiccup must never break a chat answer, so we
+    swallow PreferencesError and just skip personalization."""
+    if owner_user_id is None:
+        return None
+    try:
+        block = format_preferences(get_preferences(owner_user_id))
+    except PreferencesError:
+        logger.warning("Could not load preferences for user %s; skipping", owner_user_id)
+        return None
+    return block or None
+
+
+async def _history_with_preferences(
+    formatted_history: list[dict], owner_user_id: int | None
+) -> list[dict]:
+    """Append the user's preference note to the history fed to the answer model."""
+    note = await asyncio.to_thread(_preferences_note, owner_user_id)
+    if not note:
+        return formatted_history
+    return [*formatted_history, {"role": "system", "content": note}]
+
+
 async def _resolve_search_query(message: str, formatted_history: list[dict]) -> str:
     """Rewrite the message into a standalone search query (history-aware) so
     follow-ups retrieve correctly. Falls back to the original on any failure."""
@@ -222,15 +252,18 @@ async def generate_chat_reply(
     if classification == "out_of_scope":
         result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
     elif classification == "meta":
+        # Preferences shape the answer, not the routing — inject only here.
+        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
         reply = await _run_blocking(
             get_meta_response,
             timeout_detail="The language model timed out while generating a response. Please try again.",
             user_message=message,
-            history=formatted_history,
+            history=answer_history,
         )
         result = ChatResult(reply, "", [], status="ok")
     else:
-        result = await _answer_policy_query(message, formatted_history, allowed_tiers, allowed_regions)
+        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
+        result = await _answer_policy_query(message, answer_history, allowed_tiers, allowed_regions)
 
     try:
         append_exchange(session_id, message, result.reply, owner_user_id=owner_user_id)
@@ -329,8 +362,10 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, REFUSAL_MESSAGE, owner_user_id)
             return
 
+        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
+
         if classification == "meta":
-            answer = await asyncio.to_thread(get_meta_response, message, formatted_history)
+            answer = await asyncio.to_thread(get_meta_response, message, answer_history)
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}
@@ -356,7 +391,7 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
 
-        token_iter = stream_llm_response(message, retrieved.text, formatted_history)
+        token_iter = stream_llm_response(message, retrieved.text, answer_history)
         full_answer = ""
         while True:
             delta = await asyncio.to_thread(_next_token, token_iter)

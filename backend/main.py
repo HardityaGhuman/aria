@@ -11,6 +11,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from backend.routes.chat import router as chat_router
 from backend.routes.auth import router as auth_router
 from backend.routes.admin import router as admin_router
+from backend.routes.me import router as me_router
+from backend.core.preferences import initialize_preferences_table
 from backend.core.chat_memory import initialize_chat_memory
 from backend.core.config import FRONTEND_ORIGIN, require_jwt_secret
 from backend.core.doc_status import initialize_doc_status_table
@@ -64,7 +66,8 @@ async def startup_event():
     initialize_users_table()
     initialize_tokens_table()
     initialize_doc_status_table()
-    logger.info("Chat memory, users, refresh-token, and doc-status tables ready.")
+    initialize_preferences_table()
+    logger.info("Chat memory, users, refresh-token, doc-status, and preferences tables ready.")
 
     chunk_count = get_collection().count()
     if chunk_count == 0:
@@ -77,6 +80,7 @@ async def startup_event():
 
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(me_router)
 app.include_router(chat_router, prefix="/chat", tags=["Chat"])
 
 @app.get("/health")
