@@ -10,11 +10,13 @@ import os
 import time
 
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 # pyrefly: ignore [missing-import]
 from sse_starlette.sse import EventSourceResponse
 
 from backend.core.auth import get_current_user, regions_for_user, tiers_for_role
+from backend.core.config import RATE_LIMIT_CHAT
+from backend.core.ratelimit import limiter
 from backend.core.chat_memory import (
     ChatMemoryError,
     clear_history as clear_session_history,
@@ -58,7 +60,8 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
+@limiter.limit(RATE_LIMIT_CHAT)
+async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
     """Send a message and receive an AI response with RAG context.
 
     The user's role gates which document tiers are retrievable (RBAC).
@@ -82,7 +85,8 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+@limiter.limit(RATE_LIMIT_CHAT)
+async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
     """Stream the answer token-by-token over SSE.
 
     Same auth/RBAC as ``POST /chat``; the body is identical. Emits typed events

@@ -15,6 +15,9 @@ from backend.core.chat_memory import initialize_chat_memory
 from backend.core.config import FRONTEND_ORIGIN, require_jwt_secret
 from backend.core.doc_status import initialize_doc_status_table
 from backend.core.errors import register_error_handlers
+from backend.core.ratelimit import limiter, rate_limit_handler
+# pyrefly: ignore [missing-import]
+from slowapi.errors import RateLimitExceeded
 from backend.core.tokens import initialize_tokens_table
 from backend.core.users import initialize_users_table
 from backend.core.logging import get_logger, setup_logging
@@ -40,6 +43,11 @@ app.add_middleware(
 
 # Uniform error envelope: {"error": {"code", "message", "detail"}}.
 register_error_handlers(app)
+
+# Rate limiting (slowapi). The limiter needs to live on app.state; a breach maps
+# to the same error envelope (429 + Retry-After).
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 @app.on_event("startup")
 async def startup_event():

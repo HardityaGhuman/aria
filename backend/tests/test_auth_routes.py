@@ -6,9 +6,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.core import auth, users
+from backend.core.ratelimit import limiter
 from backend.routes.auth import router
 
 app = FastAPI()
+app.state.limiter = limiter  # login is rate-limited; slowapi reads app.state
 app.include_router(router)
 client = TestClient(app)
 

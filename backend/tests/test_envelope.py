@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 import backend.routes.chat as chatroute
 from backend.core.auth import get_current_user
 from backend.core.errors import AppError, register_error_handlers
+from backend.core.ratelimit import limiter
 from backend.services.chat_service import ChatResult
 
 
 def _make_app() -> FastAPI:
     app = FastAPI()
+    app.state.limiter = limiter  # /chat is rate-limited; slowapi reads app.state
     register_error_handlers(app)
     app.include_router(chatroute.router, prefix="/chat")
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "role": "employee", "region": "us"}
