@@ -35,6 +35,17 @@ class ChatResponse(BaseModel):
     status: str = Field(..., description="ok | no_results | blocked | refused.")
 
 
+# --- Preferences ---
+
+
+class PreferencesResponse(BaseModel):
+    """Response for ``GET/PUT /me/preferences`` (always complete via defaults)."""
+
+    tone: str = Field(..., description="Preferred tone.")
+    response_length: str = Field(..., description="Preferred answer length.")
+    language: str = Field(..., description="Preferred answer language.")
+
+
 # --- Sessions ---
 
 
