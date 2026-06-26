@@ -10,6 +10,14 @@ ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", "groq/llama-3.1-8b-instant")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
 # Provider tokens-per-minute budget, used to throttle batch evaluation runs.
 LLM_TOKENS_PER_MINUTE = int(os.getenv("LLM_TOKENS_PER_MINUTE", "12000"))
+# Resilience: retry transient provider errors with exponential backoff, and cap
+# the retrieved-context tokens so a big context never trips the model's limit.
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "0.5"))
+LLM_CONTEXT_TOKEN_BUDGET = int(os.getenv("LLM_CONTEXT_TOKEN_BUDGET", "6000"))
+# Rate limits (slowapi syntax). Protect the backend + the LLM budget.
+RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "30/minute")
+RATE_LIMIT_LOGIN = os.getenv("RATE_LIMIT_LOGIN", "10/minute")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_chatbot")
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")

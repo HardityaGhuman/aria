@@ -24,8 +24,14 @@ from backend.core.auth import (
     hash_password,
     verify_password,
 )
-from backend.core.config import COOKIE_SECURE, FRONTEND_ORIGIN, REFRESH_TOKEN_TTL_DAYS
+from backend.core.config import (
+    COOKIE_SECURE,
+    FRONTEND_ORIGIN,
+    RATE_LIMIT_LOGIN,
+    REFRESH_TOKEN_TTL_DAYS,
+)
 from backend.core.logging import get_logger
+from backend.core.ratelimit import limiter
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -74,7 +80,8 @@ def _check_origin(request: Request) -> None:
 
 
 @router.post("/login")
-def login(body: LoginRequest, response: Response):
+@limiter.limit(RATE_LIMIT_LOGIN)
+def login(request: Request, body: LoginRequest, response: Response):
     try:
         user = users.get_user_by_email(body.email)
     except users.UserError:

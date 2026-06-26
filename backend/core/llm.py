@@ -1,8 +1,85 @@
+import time
+
 # pyrefly: ignore [missing-import]
 import litellm
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-from backend.core.config import LLM_TIMEOUT_SECONDS, MODEL_NAME, ROUTER_MODEL_NAME, SYSTEM_PROMPT_PATH
+from backend.core.config import (
+    LLM_CONTEXT_TOKEN_BUDGET,
+    LLM_MAX_RETRIES,
+    LLM_RETRY_BASE_DELAY,
+    LLM_TIMEOUT_SECONDS,
+    MODEL_NAME,
+    ROUTER_MODEL_NAME,
+    SYSTEM_PROMPT_PATH,
+)
+from backend.core.errors import AppError
+from backend.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Substrings that mark a retryable provider hiccup (connection reset, 5xx,
+# overload, rate-limit). Anything else is treated as a hard failure.
+_TRANSIENT_MARKERS = (
+    "connection reset", "connection aborted", "timed out", "timeout",
+    "temporarily", "overloaded", "rate limit", "429", "500", "502", "503", "504",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_MARKERS)
+
+
+def call_with_retry(fn, *args, retries: int = None, base_delay: float = None, **kwargs):
+    """Call ``fn`` retrying transient provider errors with exponential backoff.
+
+    Why: providers occasionally drop connections or 5xx under load (the
+    ``GroqException: Connection reset by peer`` class). A bounded retry turns a
+    flaky call into a reliable one; a non-transient error fails fast. On
+    exhaustion (or a hard error) we raise ``AppError("llm_error")`` so the caller
+    surfaces a clean message instead of a raw traceback.
+    """
+    retries = LLM_MAX_RETRIES if retries is None else retries
+    base_delay = LLM_RETRY_BASE_DELAY if base_delay is None else base_delay
+    attempt = 0
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            attempt += 1
+            if attempt > retries or not _is_transient(exc):
+                logger.warning("LLM call failed (attempt %d): %s", attempt, exc)
+                raise AppError(
+                    "llm_error",
+                    "The language model is temporarily unavailable. Please try again.",
+                    status_code=502,
+                ) from exc
+            time.sleep(base_delay * (2 ** (attempt - 1)))
+
+
+def truncate_to_token_budget(text: str, max_tokens: int = None) -> str:
+    """Trim ``text`` so it fits under ``max_tokens`` for the answer model.
+
+    Why: retrieved context can grow past the model's context window; sending it
+    raises a context-length error. Trimming the longest prefix that fits keeps
+    the call valid (binary search on a prefix; token count is monotonic in
+    length)."""
+    max_tokens = LLM_CONTEXT_TOKEN_BUDGET if max_tokens is None else max_tokens
+
+    def _toks(t: str) -> int:
+        return count_tokens([{"role": "user", "content": t}])
+
+    if _toks(text) <= max_tokens:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _toks(text[:mid]) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo]
 
 def load_system_prompt() -> str:
     try:
@@ -158,21 +235,23 @@ def get_llm_response(user_message: str, context: str, history: list[dict]) -> st
         The model's response as a string.
     """
     system_prompt = load_system_prompt()
+    context = truncate_to_token_budget(context)
     augmented_message = f"""Employee question:
 {user_message}
 
 Retrieved policy excerpts:
 {context}"""
-    
+
     messages = _build_messages(system_prompt, augmented_message, history)
 
-    response = litellm.completion(
+    response = call_with_retry(
+        litellm.completion,
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
         temperature=0,
     )
-    
+
     return response.choices[0].message.content
 
 
@@ -184,6 +263,7 @@ def stream_llm_response(user_message: str, context: str, history: list[dict]):
     the model produces them, instead of blocking until the full answer is ready.
     """
     system_prompt = load_system_prompt()
+    context = truncate_to_token_budget(context)
     augmented_message = f"""Employee question:
 {user_message}
 
