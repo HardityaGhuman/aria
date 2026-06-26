@@ -25,7 +25,13 @@ from backend.core.chat_memory import (
 from backend.core.session_store import session_store
 from backend.models import ChatRequest, ChatResponse
 from backend.models.request_models import RenameSessionRequest
-from backend.models.response_models import CreateSessionResponse, SessionInfo, Source
+from backend.models.response_models import (
+    CreateSessionResponse,
+    HistoryResponse,
+    MessageResponse,
+    SessionInfo,
+    Source,
+)
 from backend.services.chat_service import generate_chat_reply, stream_chat_reply
 
 
@@ -146,7 +152,7 @@ async def rename_session(
     return SessionInfo(session_id=session_id, title=req.title, updated_at=None)
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}", response_model=MessageResponse)
 async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
     """Delete one of the caller's conversations and its messages."""
     _require_owned_session(session_id, user)
@@ -157,7 +163,7 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
     return {"message": f"Session {session_id} deleted."}
 
 
-@router.get("/history/{session_id}")
+@router.get("/history/{session_id}", response_model=HistoryResponse)
 async def get_history(session_id: str):
     """Retrieve conversation history for a session."""
     try:
@@ -167,7 +173,7 @@ async def get_history(session_id: str):
     return {"session_id": session_id, "history": history}
 
 
-@router.delete("/history/{session_id}")
+@router.delete("/history/{session_id}", response_model=MessageResponse)
 async def clear_history(session_id: str):
     """Clear conversation history for a session."""
     try:
