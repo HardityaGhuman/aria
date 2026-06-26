@@ -34,6 +34,7 @@ from backend.core.llm import (
     stream_llm_response,
     summarize_history,
 )
+from backend.core.errors import AppError
 from backend.core.logging import get_logger
 from backend.core.preferences import (
     PreferencesError,
@@ -237,7 +238,9 @@ async def generate_chat_reply(
     caller's home region. The route derives it from the user's region claim.
     """
     if not message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+        # Uniform envelope (matches the streaming path) so the client sees one
+        # error shape everywhere.
+        raise AppError("validation_error", "Message cannot be empty.", status_code=422)
 
     formatted_history = _prepare_history(session_id)
 
