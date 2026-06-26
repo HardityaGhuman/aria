@@ -35,6 +35,39 @@ class ChatResponse(BaseModel):
     status: str = Field(..., description="ok | no_results | blocked | refused.")
 
 
+# --- Auth ---
+
+
+class TokenResponse(BaseModel):
+    """Response for ``POST /auth/login`` and ``POST /auth/refresh``."""
+
+    access_token: str = Field(..., description="Short-lived bearer access token.")
+    token_type: str = Field("bearer", description="Always 'bearer'.")
+    role: str = Field(..., description="Caller's role (employee/manager/hr).")
+    region: str = Field(..., description="Caller's home region (us/india).")
+
+
+class MeResponse(BaseModel):
+    """Response for ``GET /auth/me``."""
+
+    id: int = Field(..., description="User id.")
+    role: str = Field(..., description="Caller's role.")
+    region: str = Field(..., description="Caller's home region.")
+
+
+class MessageResponse(BaseModel):
+    """Generic ``{"message": ...}`` acknowledgement."""
+
+    message: str = Field(..., description="Human-readable result.")
+
+
+class HistoryResponse(BaseModel):
+    """Response for ``GET /chat/history/{session_id}``."""
+
+    session_id: str = Field(..., description="The session the history belongs to.")
+    history: list[dict] = Field(default_factory=list, description="Ordered {role, content} messages.")
+
+
 # --- Preferences ---
 
 

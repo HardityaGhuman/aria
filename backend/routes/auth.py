@@ -32,6 +32,7 @@ from backend.core.config import (
 )
 from backend.core.logging import get_logger
 from backend.core.ratelimit import limiter
+from backend.models.response_models import MeResponse, MessageResponse, TokenResponse
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -79,7 +80,7 @@ def _check_origin(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bad origin")
 
 
-@router.post("/login")
+@router.post("/login", response_model=TokenResponse)
 @limiter.limit(RATE_LIMIT_LOGIN)
 def login(request: Request, body: LoginRequest, response: Response):
     try:
@@ -101,7 +102,7 @@ def login(request: Request, body: LoginRequest, response: Response):
     return {"access_token": access, "token_type": "bearer", "role": user["role"], "region": user.get("region", "us")}
 
 
-@router.post("/refresh")
+@router.post("/refresh", response_model=TokenResponse)
 def refresh(request: Request, response: Response):
     """Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair."""
     _check_origin(request)
@@ -126,7 +127,7 @@ def refresh(request: Request, response: Response):
     return {"access_token": access, "token_type": "bearer", "role": user["role"], "region": user.get("region", "us")}
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=MessageResponse)
 def logout(request: Request, response: Response):
     """Revoke the current refresh token and clear the cookie."""
     raw = request.cookies.get(REFRESH_COOKIE)
@@ -141,6 +142,6 @@ def logout(request: Request, response: Response):
     return {"message": "logged out"}
 
 
-@router.get("/me")
+@router.get("/me", response_model=MeResponse)
 def me(user: dict = Depends(get_current_user)):
     return user
