@@ -41,27 +41,29 @@ Each piece is designed → built → understood fully before the next.
         │
 [1] Auth + RBAC + region ......... ✅ done  (3-tier RBAC, region + temporal filter, confidential UX)
         │
-[2] Security & resilience ........ ⬜ NEXT
+[2] Security & resilience ........ ✅ done  (rate limiting, LLM retry/backoff, context truncation, CORS lockdown)
         │
-[3] User preferences (Postgres) .. ⏳
+[3] User preferences (Postgres) .. ✅ done  (/me/preferences, injected into prompt)
         │
 [4] Retrieval quality inspection . 🔄 structural fixes + consistency done; eval run + reranker pending
         │
-[5] Observability ................ ⏳
+[5] Observability ................ 🔄 response envelope done; telemetry + metrics pending
         │
-[6] Admin document lifecycle ..... ⏳
+[6] Admin document lifecycle ..... ✅ done  (upload/list/status/delete + reindex)
         │
-[7] React frontend ............... ⏳
+[7] React frontend ............... ⬜ NEXT  (binds frozen docs/api/openapi.json)
         │
 [8] pgvector + Cloud Run deploy .. ⏳  ← serverless cutover (hard blocker)
         │
 [9] Background workers / events .. ⏳
 ```
 
-**You are here:** steps 0 + 1 complete and verified end-to-end (3-tier RBAC,
-region isolation, superseded-doc exclusion, confidential-on-block UX). Corpus
-expanded to the GSVH multi-format set. Some of step 4's structural/consistency
-work landed alongside. Next planned focus: **step 2 — security & resilience**.
+**You are here:** steps 0–3 + 6 complete; 4 + 5 partially landed. A
+**backend-standardization pass** also shipped the React prerequisites: refresh-token
+rotation + HttpOnly cookie, SSE streaming (`/chat/stream`), user-owned sessions
+(`SessionStore` seam, Redis-ready), a uniform error envelope, and a **frozen
+OpenAPI** (`docs/api/openapi.json`). All 82 backend tests pass; every user/admin
+path smoke-tested end-to-end. Next planned focus: **step 7 — React frontend**.
 
 ---
 
@@ -71,12 +73,12 @@ work landed alongside. Next planned focus: **step 2 — security & resilience**.
 |---|------|--------|-------|
 | 0 | Multi-source corpus + ingestion | ✅ | GSVH Corp corpus: 7 dept folders, ~30 docs across `.md`/`.txt`/`.pdf`/`.csv`/`.xlsx`. Frontmatter `department`/`access_tier`/`region`/`doc_type`/`version`/`status`; tabular + PDF use `.meta.yaml` sidecars. CSV/XLSX ingested rows-as-chunks. Specs: `2026-06-23`, `2026-06-24`. |
 | 1 | Auth + RBAC + region | ✅ | bcrypt + JWT, `get_current_user`/`require_role`, `/auth/login`, `/auth/me` (id+role+region), HR-gated `/admin/reindex`. **3-tier RBAC** (`tiers_for_role`: employee→all, manager→all+manager, HR→all+manager+hr_only) enforced as a single app-layer **retriever partition** (security invariant unit-tested). **Region filter** (global + home region) + **superseded** exclusion as Chroma filters. Graceful **confidential message** when only restricted docs match. Specs: `2026-06-24`, `2026-06-25`. |
-| 2 | Security & resilience | ⬜ | SQL injection already safe (parameterized — invariant). TODO: prompt-injection mitigation, API rate limiting, LLM retries/backoff + context-length truncation, RPM/RPD/token budgeting, CORS tighten before deploy. |
-| 3 | User preferences | ⏳ | `user_preferences` table; `GET/PUT /me/preferences`; injected into the answer prompt. |
+| 2 | Security & resilience | ✅ | SQL injection already safe (parameterized — invariant). **Done:** per-user/IP rate limiting (slowapi), LLM retry/backoff on transient errors, context-length truncation to a token budget, CORS locked to `FRONTEND_ORIGIN` + `/auth/refresh` origin (CSRF) check. **Deferred:** prompt-injection mitigation, RPM/RPD budgeting. |
+| 3 | User preferences | ✅ | `user_preferences` table; `GET/PUT /me/preferences`; tone/length/language injected into the answer prompt (best-effort — a prefs DB hiccup never breaks a chat). |
 | 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Pending:** run offline eval harness (recall@k/MRR/context-recall + RAGAS), cross-encoder reranker, vocabulary-gap recall, router contextual-compression — all eval-gated. |
-| 5 | Observability | ⏳ | Standardized response envelope (`answer`/`sources[document_id,file,page,source_type]`/`latency_ms`); per-query telemetry log; monitoring metrics (P95/P99, no-answer rate, LLM-failure rate, cost/query). |
-| 6 | Admin document lifecycle | ⏳ | `POST /admin/documents/upload`, `GET …/{id}/status`, `DELETE …/{id}`, `POST /admin/reindex` (exists); per-doc `queued→processing→indexed→failed`; object storage (S3); index rebuild semantics. |
-| 7 | React frontend | ⏳ | Replaces Streamlit; consumes auth + document-admin + chat endpoints. |
+| 5 | Observability | 🔄 | **Done:** standardized response envelope (`answer`/`sources[document_id,file,section,source_type]`/`latency_ms`/`session_id`/`status`) + uniform error body. **Pending:** per-query telemetry log; monitoring metrics (P95/P99, no-answer rate, LLM-failure rate, cost/query). |
+| 6 | Admin document lifecycle | ✅ | `POST /admin/documents/upload` (multipart, background ingest), `GET /admin/documents` (+status), `GET …/{id}/status`, `DELETE …/{id}` (file + chunks), `POST /admin/reindex`. Per-doc `queued→processing→indexed→failed` in `document_status`. **Deferred:** object storage (S3); ingestion stays synchronous-in-background for now. |
+| 7 | React frontend | ⬜ NEXT | Replaces Streamlit; codegens its client from the frozen `docs/api/openapi.json`; consumes auth (login/refresh), chat (+SSE), sessions, preferences, and the HR admin endpoints. |
 | 8 | pgvector migration + Cloud Run deploy | ⏳ | Vectors off local Chroma into Postgres; the serverless cutover and hard hosting blocker. |
 | 9 | Background workers / event ingestion | ⏳ | Cron → webhook (event-based); backend polls document-status endpoint, advances when `indexed`. |
 
@@ -104,8 +106,9 @@ Full detail lives in `CLAUDE.md → Forward Requirements`.
   a CLI reindex requires a server restart today because Chroma/BM25 are cached in
   memory.
 - **Identity is the connective tissue** — user-owned sessions are what make
-  preferences, long-term memory, and RBAC possible. (Session ownership
-  `owner_user_id` deferred to the Redis cutover.)
+  preferences, long-term memory, and RBAC possible. Session ownership
+  (`owner_user_id`) now lands behind a `SessionStore` seam (Postgres impl today,
+  Redis swap later with no route changes).
 
 ---
 
@@ -122,7 +125,10 @@ Full detail lives in `CLAUDE.md → Forward Requirements`.
 
 ## Immediate next actions
 
-1. Live-re-verify in the UI after a reindex + server restart (PTO=24, region
-   isolation, confidential-on-block).
-2. Begin **step 2 — security & resilience** (rate limiting + graceful LLM error
-   handling first; they are partly needed already).
+1. Begin **step 7 — React frontend**: codegen a typed client from
+   `docs/api/openapi.json`; build chat (with SSE streaming), session list, the
+   preferences screen, and the HR admin/document portal.
+2. For local dev set `COOKIE_SECURE=false` so the refresh cookie is sent over
+   `http://localhost` (it is `Secure` by default for prod).
+3. Re-run `scripts/export_openapi.py` whenever a route or model changes so the
+   frozen contract stays in sync.
