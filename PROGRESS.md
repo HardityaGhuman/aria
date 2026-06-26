@@ -56,6 +56,12 @@ Each piece is designed → built → understood fully before the next.
 [8] pgvector + Cloud Run deploy .. ⏳  ← serverless cutover (hard blocker)
         │
 [9] Background workers / events .. ⏳
+        │
+[10] Agentic tool loop ........... ⏳  (bounded loop + tool registry; security-first)
+        │
+[11] Third-party tools ........... ⏳  (Slack + Sheets + Calendar + holidays; read-before-write)
+        │
+[12] Drive auto-ingest ........... ⏳  (HR folder → webhook → upload)
 ```
 
 **You are here:** steps 0–3 + 6 complete; 4 + 5 partially landed. A
@@ -81,6 +87,9 @@ path smoke-tested end-to-end. Next planned focus: **step 7 — React frontend**.
 | 7 | React frontend | ⬜ NEXT | Replaces Streamlit; codegens its client from the frozen `docs/api/openapi.json`; consumes auth (login/refresh), chat (+SSE), sessions, preferences, and the HR admin endpoints. |
 | 8 | pgvector migration + Cloud Run deploy | ⏳ | Vectors off local Chroma into Postgres; the serverless cutover and hard hosting blocker. |
 | 9 | Background workers / event ingestion | ⏳ | Cron → webhook (event-based); backend polls document-status endpoint, advances when `indexed`. |
+| 10 | Agentic tool loop + tool registry | ⏳ | Bounded agent loop (`MAX_TOOL_STEPS`, default 3) inside `chat_service`; `core/tools/` registry exposes only the tools a caller's `Principal` (from JWT) may use; streams the reserved SSE `tool_call`/`tool_result`/`step` events (no contract change). **Security-first:** identity from JWT only, loop cap, gated behind `AGENT_TOOLS_ENABLED` (off = today's pure-RAG). Spec: `2026-06-26`. |
+| 11 | Third-party API tools | ⏳ | *Read-before-write.* **Tier 1 (read):** leave-balance (Google Sheet mock-HRIS, principal-scoped) + policy citation; region holidays (public API); **Slack front-door** (`/aria …`, HMAC-verified). **Tier 2 (write, confirmation-gated):** book-leave (Calendar + Sheet) — `confirmation_required` before any mutation. Least-privilege Google service account. Spec: `2026-06-26`. |
+| 12 | Drive auto-ingest (Tier 3) | ⏳ | HR drops a file in a watched Drive folder → webhook → existing `/admin/documents/upload`. Builds on step 9; independent of the agent loop. Spec: `2026-06-26`. |
 
 ---
 
@@ -93,6 +102,10 @@ path smoke-tested end-to-end. Next planned focus: **step 7 — React frontend**.
 - **Admin lifecycle (step 6):** the 5-endpoint surface + async per-document
   status.
 - **Event ingestion (step 9):** webhook trigger + status polling.
+- **Agentic tool security (steps 10–12):** identity from JWT only (never LLM args),
+  confirmation gate on every write, loop cap, untrusted-context rule extended to
+  tools, Slack HMAC + replay window, least-privilege Google service account,
+  `AGENT_TOOLS_ENABLED` rollback switch.
 
 Full detail lives in `CLAUDE.md → Forward Requirements`.
 
