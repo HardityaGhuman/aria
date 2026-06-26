@@ -104,16 +104,28 @@ def _is_insufficient_policy_answer(reply: str) -> bool:
 
 async def _run_blocking(fn, *args, timeout_detail: str, **kwargs):
     """Offload a blocking LLM call to a worker thread with a timeout, mapping
-    failures to HTTP errors so the routes don't have to."""
+    failures to the uniform error envelope so the client sees one error shape.
+
+    Timeouts → ``llm_timeout``; an already-enveloped ``AppError`` (e.g. the
+    retry wrapper's ``llm_error``) passes through unchanged; any other failure →
+    ``llm_error`` with the real cause logged server-side (never leaked to the
+    client as ``str(e)``)."""
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(fn, *args, **kwargs),
             timeout=LLM_TIMEOUT_SECONDS + 5,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail=timeout_detail)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise AppError("llm_timeout", timeout_detail, status_code=504)
+    except AppError:
+        raise
+    except Exception:
+        logger.exception("LLM call failed in %s", getattr(fn, "__name__", "unknown"))
+        raise AppError(
+            "llm_error",
+            "The language model failed to respond. Please try again.",
+            status_code=502,
+        )
 
 
 def _prepare_history(session_id: str) -> list[dict]:
