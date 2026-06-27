@@ -16,6 +16,12 @@ describe("parseSSE", () => {
     expect(buffer).toContain("event: done"); // partial held for next chunk
   });
 
+  it("handles CRLF line endings (sse-starlette)", () => {
+    const raw = 'event: token\r\ndata: {"delta":"Hi"}\r\n\r\n';
+    const { events } = parseSSE(raw, "");
+    expect(events).toEqual([{ event: "token", data: { delta: "Hi" } }]);
+  });
+
   it("completes a frame split across two chunks", () => {
     const first = parseSSE('event: token\ndata: {"del', "");
     expect(first.events).toEqual([]);

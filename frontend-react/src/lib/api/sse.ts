@@ -22,7 +22,8 @@ export function parseSSE(
   chunk: string,
   buffer: string,
 ): { events: { event: string; data: any }[]; buffer: string } {
-  const text = buffer + chunk;
+  // sse-starlette emits CRLF line endings; normalize so frame splitting works.
+  const text = (buffer + chunk).replace(/\r\n/g, "\n");
   const parts = text.split("\n\n");
   const tail = parts.pop() ?? ""; // last piece may be incomplete
   const events: { event: string; data: any }[] = [];
