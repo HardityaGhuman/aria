@@ -11,6 +11,10 @@ type AuthValue = {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
+// Guards the one-time session restore against React StrictMode's double-invoke
+// of effects in dev (which otherwise fires /auth/refresh + /auth/me twice).
+let restoreStarted = false;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<MeResponse | null>(null);
   const [ready, setReady] = useState(false);
@@ -20,6 +24,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAccessToken(null);
       setUser(null);
     });
+    if (restoreStarted) {
+      setReady(true);
+      return;
+    }
+    restoreStarted = true;
     // Try to restore a session from the refresh cookie.
     (async () => {
       try {
