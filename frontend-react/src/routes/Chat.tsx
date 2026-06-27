@@ -6,6 +6,7 @@ import { Composer } from "../components/Composer";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { SourcesPanel } from "../components/SourcesPanel";
 import { Markdown } from "../components/Markdown";
+import { AssistantAvatar } from "../components/AssistantAvatar";
 import { streamChat } from "../lib/api/sse";
 import { ensureSession } from "../lib/api/sessions";
 import { apiFetch } from "../lib/api/client";
@@ -17,6 +18,7 @@ type Msg = { role: "user" | "assistant"; content: string };
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [showSources, setShowSources] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const sessionId = useRef<string | null>(null);
   const pendingFinal = useRef<string | null>(null);
@@ -108,8 +110,20 @@ export default function Chat() {
   const empty = messages.length === 0 && !streaming;
 
   return (
-    <AppShell inspector={<SourcesPanel sources={sources} />}>
-      <div className="flex h-full flex-col">
+    <AppShell inspector={showSources ? <SourcesPanel sources={sources} /> : undefined}>
+      <div className="flex h-full flex-col px-2 pt-2">
+        {/* Top bar: collapse/expand the Sources panel. */}
+        <div className="flex justify-end pb-2">
+          <button
+            onClick={() => setShowSources((s) => !s)}
+            className="flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-2.5 py-1.5 text-[12px] text-text-secondary hover:text-text-ink"
+            title={showSources ? "Hide sources" : "Show sources"}
+          >
+            <span aria-hidden>▦</span>
+            {showSources ? "Hide sources" : "Show sources"}
+          </button>
+        </div>
+
         {empty ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-6">
             <div className="text-2xl">✦</div>
@@ -121,7 +135,7 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 flex-col gap-6 overflow-y-auto py-4">
+          <div className="flex flex-1 flex-col gap-7 overflow-y-auto px-2 pb-4 pt-2">
             {messages.map((m, i) => (
               <Bubble key={i} role={m.role} content={m.content} />
             ))}
@@ -129,7 +143,7 @@ export default function Chat() {
           </div>
         )}
 
-        <div className="pt-4">
+        <div className="px-2 pt-4">
           <Composer
             placeholder={empty ? "Message Aria…" : "Ask a follow up…"}
             onSend={handleSend}
@@ -155,18 +169,24 @@ function Bubble({
 }) {
   if (role === "user") {
     return (
-      <div className="self-end">
-        <div className="rounded-card border border-hairline bg-surface px-4 py-2 text-[15px]">
+      <div className="flex justify-end">
+        <div className="max-w-[80%] rounded-card border border-hairline bg-surface px-4 py-2.5 text-[15px]">
           {content}
         </div>
       </div>
     );
   }
   return (
-    <div className="self-start">
-      <div className="mb-1 h-6 w-6 rounded-full bg-ink" aria-hidden />
-      <div className="max-w-[640px] text-[15px] leading-[1.55] text-text-ink">
-        {content ? <Markdown>{content}</Markdown> : streaming ? <span className="text-text-tertiary">…</span> : null}
+    <div className="flex items-start gap-3">
+      <div className="mt-0.5">
+        <AssistantAvatar />
+      </div>
+      <div className="max-w-[680px] pt-0.5 text-[15px] leading-[1.6] text-text-ink">
+        {content ? (
+          <Markdown>{content}</Markdown>
+        ) : streaming ? (
+          <span className="text-text-tertiary">…</span>
+        ) : null}
       </div>
     </div>
   );
