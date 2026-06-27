@@ -5,8 +5,8 @@ export function AppShell({ children, inspector }: { children: ReactNode; inspect
   return (
     <div className="flex h-full bg-canvas">
       <Sidebar />
-      <main className="flex flex-1 justify-center overflow-y-auto">
-        <div className="flex w-full max-w-[800px] flex-col px-8 py-6">{children}</div>
+      <main className="flex flex-1 justify-center overflow-y-auto px-10 py-6">
+        <div className="flex w-full max-w-[800px] flex-col">{children}</div>
       </main>
       {inspector && (
         <aside className="w-[320px] shrink-0 overflow-y-auto border-l border-hairline bg-surface p-6">

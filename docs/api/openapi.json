@@ -288,6 +288,18 @@
       "MeResponse": {
         "description": "Response for ``GET /auth/me``.",
         "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Caller's email, when present in the token.",
+            "title": "Email"
+          },
           "id": {
             "description": "User id.",
             "title": "Id",
