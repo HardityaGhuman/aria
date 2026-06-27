@@ -31,14 +31,18 @@ export default function Chat() {
     if (!openId) return;
     sessionId.current = openId;
     (async () => {
-      const res = await apiFetch<{ history: { role: string; content: string }[] }>(
-        `/chat/history/${openId}`,
-        { auth: true },
-      );
+      const res = await apiFetch<{
+        history: { role: string; content: string; sources?: Source[] | null }[];
+      }>(`/chat/history/${openId}`, { auth: true });
       setMessages(
         res.history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
       );
-      setSources([]);
+      // Restore the citations from the most recent assistant turn that had any,
+      // so the Sources panel matches what the answer originally showed.
+      const lastWithSources = [...res.history]
+        .reverse()
+        .find((h) => h.role === "assistant" && h.sources && h.sources.length > 0);
+      setSources(lastWithSources?.sources ?? []);
     })();
   }, [openId]);
 
