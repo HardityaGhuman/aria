@@ -77,15 +77,6 @@ export default function Preferences() {
             </div>
             <Toggle checked disabled />
           </div>
-          <div className={row}>
-            <div>
-              <div className="text-[14px] text-text-ink">Code Highlighting</div>
-              <div className="text-[12px] text-text-secondary">
-                Enable syntax highlighting for code snippets.
-              </div>
-            </div>
-            <Toggle checked disabled />
-          </div>
         </div>
 
         <div className="flex items-center gap-3">
