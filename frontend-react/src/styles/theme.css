@@ -15,6 +15,7 @@
   --color-badge-all: #e8e8ed;
   --color-badge-manager: #f0a23c;
   --color-badge-hr: #c2415b;
+  --color-on-ink: #ffffff;
 
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "Geist", ui-monospace, monospace;
@@ -22,6 +23,20 @@
   --radius-card: 0.875rem; /* ~14px, Stitch 12–16px container range */
 
   --shadow-card: 0px 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+/* Dark theme: override the semantic tokens; every component reads these vars,
+   so flipping them here flips the whole UI. Toggled via `.dark` on <html>. */
+.dark {
+  --color-canvas: #0f0f10;
+  --color-surface: #1a1a1c;
+  --color-hairline: #2c2c30;
+  --color-ink: #f0f0f2; /* primary buttons/avatars become light on dark */
+  --color-on-ink: #1a1a1c;
+  --color-text-ink: #ececee;
+  --color-text-secondary: #a0a0a6;
+  --color-text-tertiary: #6c6c72;
+  --color-badge-all: #2c2c30;
 }
 
 html,
@@ -36,4 +51,7 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   letter-spacing: -0.011em;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }

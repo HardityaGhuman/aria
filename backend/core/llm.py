@@ -142,14 +142,16 @@ def classify_query(user_message: str, history: list[dict]) -> str:
         if msg.get("content")
     ) or "No prior conversation."
     classification_prompt = f"""### 1. Task
-Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, meta, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
+Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, meta, chitchat, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
 
 ### 2. Labels
 - policy: the query needs the SUBSTANCE of a company rule, benefit, entitlement, procedure, handbook topic, or operational practice to answer, OR it asks for guidance on how to handle, report, or resolve a real workplace situation the company's policies govern — incidents, losses, errors, access problems, eligibility, requests, or entitlements. This holds regardless of grammatical person or phrasing: "what is the policy on X", "what do I do if Y happens", "how / who do I report Z to", and conversational, first-person, or situational wordings all count. It also includes asking to summarize or explain a policy topic, and follow-ups that ask for MORE policy detail even when they reference the prior turn. When in doubt between policy and out_of_scope, choose policy — retrieval can still decline if nothing relevant is found.
 - meta: the query is about THIS CONVERSATION itself — the messages exchanged, what the user asked, what the assistant previously said, or a recap/count of the chat. The answer comes from the conversation transcript, not from policy documents. Signals: "I/you/we" referring to earlier turns, "this conversation/chat", "so far", "earlier", "last/previous question or answer", "what did you say", "repeat that", "how many questions", "recap/summarize our discussion".
+- chitchat: a greeting, thanks, farewell, or light social pleasantry, or a simple question about Aria itself or its capabilities ("hi", "hello", "good morning", "thanks", "how are you", "who are you", "are you real", "what can you do", "what can you help with"). No company-policy substance is needed and nothing in the transcript is needed — it just deserves a warm, brief, human reply. This is NOT out_of_scope.
 - out_of_scope: general knowledge, code, or tasks with no connection to the company, OR any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy. A genuine question about handling or reporting a workplace situation is NOT out_of_scope simply because it is phrased personally or asks "what do I do" — that is policy.
 
 ### 3. Disambiguation
+- A greeting, thanks, farewell, or a question about who/what Aria is or what it can do -> chitchat (warm reply), NOT out_of_scope.
 - A request for the rule, entitlement, or the procedure to handle/report a workplace situation -> policy, no matter how conversational or first-person the wording.
 - "summarize the <topic> policy" / "explain <topic>" -> policy (document substance).
 - "summarize/recap what WE discussed" or "what have I asked" -> meta (the conversation).
@@ -163,6 +165,7 @@ Classify the user's latest query for a company policy assistant. Return exactly 
 - A question asking how to report or respond to a workplace incident, loss, error, or access problem -> policy
 - A follow-up asking for more detail on a policy topic already discussed -> policy
 - A question about what was said or asked earlier in this chat, or a recap/count of it -> meta
+- A greeting, thanks, or a "who are you / what can you do" question -> chitchat
 - A request to write, draft, or generate any document, email, or message -> out_of_scope
 - A general-knowledge or unrelated question with no company-policy answer -> out_of_scope
 
@@ -185,9 +188,41 @@ Latest query:
     label = response.choices[0].message.content.strip().lower()
     if "meta" in label:
         return "meta"
+    if "chitchat" in label or "chit chat" in label:
+        return "chitchat"
     if "out_of_scope" in label or "out of scope" in label:
         return "out_of_scope"
     return "policy"
+
+
+def get_chitchat_response(user_message: str) -> str:
+    """Warm, brief reply to a greeting or small-talk turn — no retrieval, no
+    refusal. Aria stays human but gently anchors back to what she can help with."""
+    prompt = f"""You are Aria, a warm, friendly internal assistant for company employees.
+The user said something social (a greeting, thanks, or a question about you) — not a
+policy question. Reply like a kind, helpful colleague.
+
+Guidelines:
+- Be warm and natural, 1-2 short sentences. A little personality is welcome.
+- If they greeted you, greet them back and invite their question.
+- If they asked who/what you are or what you can do, say you're Aria and you help
+  employees find answers in the company's policies and handbook (leave, benefits,
+  expenses, IT, conduct, and so on).
+- Don't invent company facts or quote policies here. Don't be stiff or robotic.
+
+User said:
+{user_message}"""
+    messages = _build_messages(
+        "You are Aria, a warm and personable internal company assistant.",
+        prompt,
+    )
+    response = litellm.completion(
+        model=ROUTER_MODEL_NAME,
+        messages=messages,
+        timeout=LLM_TIMEOUT_SECONDS,
+        temperature=0.6,
+    )
+    return response.choices[0].message.content.strip()
 
 
 def get_meta_response(user_message: str, history: list[dict]) -> str:

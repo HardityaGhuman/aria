@@ -6,6 +6,15 @@ import { AuthProvider } from "./lib/auth/AuthContext";
 import App from "./App";
 import "./styles/theme.css";
 
+// Apply the saved theme before first paint to avoid a flash.
+{
+  const saved = localStorage.getItem("theme");
+  const dark = saved
+    ? saved === "dark"
+    : (window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
+  document.documentElement.classList.toggle("dark", dark);
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { refetchOnWindowFocus: false, staleTime: 30_000 },
