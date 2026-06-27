@@ -13,6 +13,7 @@ export function HistoryList({
   const qc = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const { data } = useQuery({
     queryKey: ["sessions"],
@@ -77,22 +78,47 @@ export function HistoryList({
             <button className="flex-1 truncate text-left" onClick={() => onOpen(s.session_id)}>
               {s.title || "Untitled chat"}
             </button>
-            <button
-              className="text-text-tertiary opacity-0 hover:text-text-ink group-hover:opacity-100"
-              onClick={() => startEdit(s)}
-              aria-label="rename"
-              title="Rename"
-            >
-              ✎
-            </button>
-            <button
-              className="text-text-tertiary opacity-0 hover:text-badge-hr group-hover:opacity-100"
-              onClick={() => del.mutate(s.session_id)}
-              aria-label="delete"
-              title="Delete"
-            >
-              ×
-            </button>
+            {confirming === s.session_id ? (
+              <span className="flex items-center gap-1.5 text-[12px]">
+                <span className="text-text-tertiary">Delete?</span>
+                <button
+                  className="font-medium text-badge-hr hover:underline"
+                  onClick={() => {
+                    del.mutate(s.session_id);
+                    setConfirming(null);
+                  }}
+                  aria-label="confirm delete"
+                >
+                  Yes
+                </button>
+                <button
+                  className="text-text-tertiary hover:text-text-ink"
+                  onClick={() => setConfirming(null)}
+                  aria-label="cancel delete"
+                >
+                  No
+                </button>
+              </span>
+            ) : (
+              <>
+                <button
+                  className="text-text-tertiary opacity-0 hover:text-text-ink group-hover:opacity-100"
+                  onClick={() => startEdit(s)}
+                  aria-label="rename"
+                  title="Rename"
+                >
+                  ✎
+                </button>
+                <button
+                  className="text-text-tertiary opacity-0 hover:text-badge-hr group-hover:opacity-100"
+                  onClick={() => setConfirming(s.session_id)}
+                  aria-label="delete"
+                  title="Delete"
+                >
+                  ×
+                </button>
+              </>
+            )}
           </div>
         ),
       )}

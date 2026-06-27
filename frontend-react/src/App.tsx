@@ -1,7 +1,6 @@
 import { Routes, Route } from "react-router-dom";
 import Login from "./routes/Login";
 import Chat from "./routes/Chat";
-import History from "./routes/History";
 import Preferences from "./routes/Preferences";
 import AdminDocuments from "./routes/AdminDocuments";
 import { RequireAuth } from "./lib/auth/RequireAuth";
@@ -16,14 +15,6 @@ export default function App() {
         element={
           <RequireAuth>
             <Chat />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/history"
-        element={
-          <RequireAuth>
-            <History />
           </RequireAuth>
         }
       />

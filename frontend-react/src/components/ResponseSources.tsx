@@ -17,11 +17,13 @@ export function ResponseSources({ sources }: { sources: Source[] }) {
     <div className="mt-3">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 text-[12px] text-text-tertiary hover:text-text-secondary"
+        className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-canvas px-2.5 py-1 text-[12px] text-text-secondary transition hover:border-marigold/50 hover:text-text-ink"
       >
-        <span aria-hidden>◇</span>
+        <span aria-hidden className="text-marigold">
+          ◇
+        </span>
         {sources.length} source{sources.length > 1 ? "s" : ""}
-        <span aria-hidden className="text-[10px]">
+        <span aria-hidden className="text-[10px] text-text-tertiary">
           {open ? "▲" : "▼"}
         </span>
       </button>

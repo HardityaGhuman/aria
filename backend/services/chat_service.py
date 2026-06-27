@@ -29,6 +29,7 @@ from backend.core.config import (
 from backend.core.llm import (
     classify_query,
     count_tokens,
+    get_chitchat_response,
     get_llm_response,
     get_meta_response,
     stream_llm_response,
@@ -266,6 +267,13 @@ async def generate_chat_reply(
 
     if classification == "out_of_scope":
         result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
+    elif classification == "chitchat":
+        reply = await _run_blocking(
+            get_chitchat_response,
+            message,
+            timeout_detail="The language model timed out. Please try again.",
+        )
+        result = ChatResult(reply, "", [], status="ok")
     elif classification == "meta":
         # Preferences shape the answer, not the routing — inject only here.
         answer_history = await _history_with_preferences(formatted_history, owner_user_id)
@@ -387,6 +395,14 @@ async def stream_chat_reply(
         if classification == "out_of_scope":
             yield {"event": "done", "data": _envelope(REFUSAL_MESSAGE, [], "refused")}
             await _persist_quietly(session_id, message, REFUSAL_MESSAGE, owner_user_id)
+            return
+
+        if classification == "chitchat":
+            answer = await asyncio.to_thread(get_chitchat_response, message)
+            yield {"event": "token", "data": {"delta": answer}}
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(answer, [], "ok")}
+            await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
         answer_history = await _history_with_preferences(formatted_history, owner_user_id)
