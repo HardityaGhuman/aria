@@ -3,7 +3,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api/client";
 import type { SessionInfo } from "../lib/api/schemas";
 
-export function HistoryList({ onOpen }: { onOpen: (id: string) => void }) {
+export function HistoryList({
+  onOpen,
+  activeId,
+}: {
+  onOpen: (id: string) => void;
+  activeId?: string | null;
+}) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -62,7 +68,11 @@ export function HistoryList({ onOpen }: { onOpen: (id: string) => void }) {
         ) : (
           <div
             key={s.session_id}
-            className="group flex items-center gap-1 rounded-lg px-3 py-1.5 text-[13px] text-text-secondary hover:bg-canvas"
+            className={`group flex items-center gap-1 rounded-lg px-3 py-1.5 text-[13px] hover:bg-canvas ${
+              activeId === s.session_id
+                ? "bg-canvas font-medium text-text-ink"
+                : "text-text-secondary"
+            }`}
           >
             <button className="flex-1 truncate text-left" onClick={() => onOpen(s.session_id)}>
               {s.title || "Untitled chat"}

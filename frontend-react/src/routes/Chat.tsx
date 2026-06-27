@@ -1,60 +1,66 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "../components/AppShell";
 import { Composer } from "../components/Composer";
 import { SuggestionChips } from "../components/SuggestionChips";
-import { SourcesPanel } from "../components/SourcesPanel";
 import { Markdown } from "../components/Markdown";
 import { AssistantAvatar } from "../components/AssistantAvatar";
+import { ResponseSources } from "../components/ResponseSources";
 import { streamChat } from "../lib/api/sse";
 import { ensureSession } from "../lib/api/sessions";
 import { apiFetch } from "../lib/api/client";
 import { useSmoothText } from "../lib/useSmoothText";
 import type { Source } from "../lib/api/schemas";
 
-type Msg = { role: "user" | "assistant"; content: string };
+type Msg = { role: "user" | "assistant"; content: string; sources?: Source[] };
 
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [sources, setSources] = useState<Source[]>([]);
-  const [showSources, setShowSources] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const sessionId = useRef<string | null>(null);
   const pendingFinal = useRef<string | null>(null);
+  const pendingSources = useRef<Source[]>([]);
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const smooth = useSmoothText();
 
   const [params] = useSearchParams();
   const openId = params.get("s");
 
-  // Load an existing session when navigated to via ?s=<id>.
+  // Sync the active conversation to the URL's ?s=. Opening a session loads it;
+  // landing on "/" (e.g. clicking New chat) resets to a fresh, empty chat.
   useEffect(() => {
-    if (!openId) return;
-    sessionId.current = openId;
-    (async () => {
-      const res = await apiFetch<{
-        history: { role: string; content: string; sources?: Source[] | null }[];
-      }>(`/chat/history/${openId}`, { auth: true });
-      setMessages(
-        res.history.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
-      );
-      // Restore the citations from the most recent assistant turn that had any,
-      // so the Sources panel matches what the answer originally showed.
-      const lastWithSources = [...res.history]
-        .reverse()
-        .find((h) => h.role === "assistant" && h.sources && h.sources.length > 0);
-      setSources(lastWithSources?.sources ?? []);
-    })();
-  }, [openId]);
+    if (openId && openId !== sessionId.current) {
+      sessionId.current = openId;
+      (async () => {
+        const res = await apiFetch<{
+          history: { role: string; content: string; sources?: Source[] | null }[];
+        }>(`/chat/history/${openId}`, { auth: true });
+        setMessages(
+          res.history.map((h) => ({
+            role: h.role as "user" | "assistant",
+            content: h.content,
+            sources: h.sources ?? undefined,
+          })),
+        );
+      })();
+    } else if (!openId && sessionId.current !== null) {
+      sessionId.current = null;
+      setMessages([]);
+      smooth.reset();
+    }
+  }, [openId, smooth]);
 
-  // Commit the streamed answer once the smooth reveal has caught up to the final text.
+  // Commit the streamed answer (with its sources) once the smooth reveal catches up.
   useEffect(() => {
     if (pendingFinal.current == null) return;
     if (smooth.shown === pendingFinal.current) {
       const final = pendingFinal.current;
+      const srcs = pendingSources.current;
       pendingFinal.current = null;
-      setMessages((m) => [...m, { role: "assistant", content: final }]);
+      pendingSources.current = [];
+      setMessages((m) => [...m, { role: "assistant", content: final, sources: srcs }]);
       smooth.reset();
       setStreaming(false);
     }
@@ -64,33 +70,37 @@ export default function Chat() {
     if (streaming) return;
     const isNew = sessionId.current === null;
     setStreaming(true);
-    setSources([]);
+    pendingSources.current = [];
     smooth.reset();
     setMessages((m) => [...m, { role: "user", content: text }]);
 
     try {
       const sid = await ensureSession(sessionId.current);
-      sessionId.current = sid;
-      if (isNew) qc.invalidateQueries({ queryKey: ["sessions"] });
+      sessionId.current = sid; // set before navigate so the openId effect skips a reload
+      if (isNew) {
+        navigate(`/?s=${sid}`, { replace: true });
+        qc.invalidateQueries({ queryKey: ["sessions"] });
+      }
 
       await streamChat(
         { message: text, session_id: sid },
         {
           onToken: (delta) => smooth.push(delta),
-          onSources: (s) => setSources(s),
+          onSources: (s) => {
+            pendingSources.current = s;
+          },
           onDone: (env) => {
             pendingFinal.current = env.answer;
+            pendingSources.current = env.sources ?? pendingSources.current;
             smooth.finalize(env.answer);
           },
           onError: (_code, message) => {
-            const msg = `⚠️ ${message}`;
-            pendingFinal.current = msg;
-            smooth.finalize(msg);
+            pendingFinal.current = `⚠️ ${message}`;
+            smooth.finalize(pendingFinal.current);
           },
         },
       );
 
-      // First message in a brand-new session: title it from the question.
       if (isNew) {
         const title = text.length > 60 ? `${text.slice(0, 57)}…` : text;
         apiFetch(`/chat/sessions/${sid}`, {
@@ -110,20 +120,8 @@ export default function Chat() {
   const empty = messages.length === 0 && !streaming;
 
   return (
-    <AppShell inspector={showSources ? <SourcesPanel sources={sources} /> : undefined}>
-      <div className="flex h-full flex-col px-2 pt-2">
-        {/* Top bar: collapse/expand the Sources panel. */}
-        <div className="flex justify-end pb-2">
-          <button
-            onClick={() => setShowSources((s) => !s)}
-            className="flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-2.5 py-1.5 text-[12px] text-text-secondary hover:text-text-ink"
-            title={showSources ? "Hide sources" : "Show sources"}
-          >
-            <span aria-hidden>▦</span>
-            {showSources ? "Hide sources" : "Show sources"}
-          </button>
-        </div>
-
+    <AppShell>
+      <div className="flex h-full flex-col">
         {empty ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-6">
             <div className="text-2xl">✦</div>
@@ -135,9 +133,9 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 flex-col gap-7 overflow-y-auto px-2 pb-4 pt-2">
+          <div className="flex flex-1 flex-col gap-7 overflow-y-auto px-2 pb-4 pt-4 pr-4">
             {messages.map((m, i) => (
-              <Bubble key={i} role={m.role} content={m.content} />
+              <Bubble key={i} role={m.role} content={m.content} sources={m.sources} />
             ))}
             {streaming && <Bubble role="assistant" content={smooth.shown} streaming />}
           </div>
@@ -161,10 +159,12 @@ export default function Chat() {
 function Bubble({
   role,
   content,
+  sources,
   streaming,
 }: {
   role: "user" | "assistant";
   content: string;
+  sources?: Source[];
   streaming?: boolean;
 }) {
   if (role === "user") {
@@ -181,12 +181,15 @@ function Bubble({
       <div className="mt-0.5">
         <AssistantAvatar />
       </div>
-      <div className="max-w-[680px] pt-0.5 text-[15px] leading-[1.6] text-text-ink">
-        {content ? (
-          <Markdown>{content}</Markdown>
-        ) : streaming ? (
-          <span className="text-text-tertiary">…</span>
-        ) : null}
+      <div className="min-w-0 flex-1">
+        <div className="max-w-[680px] pt-0.5 text-[15px] leading-[1.6] text-text-ink">
+          {content ? (
+            <Markdown>{content}</Markdown>
+          ) : streaming ? (
+            <span className="text-text-tertiary">…</span>
+          ) : null}
+        </div>
+        {sources && <ResponseSources sources={sources} />}
       </div>
     </div>
   );
