@@ -281,7 +281,13 @@ async def generate_chat_reply(
         result = await _answer_policy_query(message, answer_history, allowed_tiers, allowed_regions)
 
     try:
-        append_exchange(session_id, message, result.reply, owner_user_id=owner_user_id)
+        # Mirror the streaming path: persist citations only for a grounded answer,
+        # in the same Source shape the client receives.
+        persisted_sources = _source_dicts(result.sources) if result.status == "ok" else []
+        append_exchange(
+            session_id, message, result.reply,
+            owner_user_id=owner_user_id, sources=persisted_sources,
+        )
     except ChatMemoryError as e:
         raise HTTPException(status_code=503, detail=e.message)
 
@@ -320,13 +326,19 @@ def _next_token(iterator):
 
 
 async def _persist_quietly(
-    session_id: str, message: str, answer: str, owner_user_id: int | None = None
+    session_id: str,
+    message: str,
+    answer: str,
+    owner_user_id: int | None = None,
+    sources: list[dict] | None = None,
 ) -> None:
     """Persist the exchange after the answer is already streamed. A memory error
-    here must not corrupt a response the client has fully received — log, don't raise."""
+    here must not corrupt a response the client has fully received — log, don't raise.
+    ``sources`` are the same Source-shaped citations the client received, stored so
+    reopening the chat restores them."""
     try:
         await asyncio.to_thread(
-            append_exchange, session_id, message, answer, owner_user_id
+            append_exchange, session_id, message, answer, owner_user_id, sources
         )
     except Exception:
         logger.exception("Failed to persist streamed exchange for session %s", session_id)
@@ -418,6 +430,7 @@ async def stream_chat_reply(
 
         # Post-checks mirror the non-streaming path: an ungrounded answer drops
         # its sources and reports the matching status.
+        final_sources: list[dict] = []
         if _is_refusal(full_answer):
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "refused")}
@@ -425,11 +438,11 @@ async def stream_chat_reply(
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
         else:
-            sources = _source_dicts(retrieved.sources)
-            yield {"event": "sources", "data": {"sources": sources}}
-            yield {"event": "done", "data": _envelope(full_answer, sources, "ok")}
+            final_sources = _source_dicts(retrieved.sources)
+            yield {"event": "sources", "data": {"sources": final_sources}}
+            yield {"event": "done", "data": _envelope(full_answer, final_sources, "ok")}
 
-        await _persist_quietly(session_id, message, full_answer, owner_user_id)
+        await _persist_quietly(session_id, message, full_answer, owner_user_id, final_sources)
 
     except Exception:
         logger.exception("Streaming chat failed for session %s", session_id)

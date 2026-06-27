@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import psycopg
 # pyrefly: ignore [missing-import]
 from psycopg.rows import dict_row
+# pyrefly: ignore [missing-import]
+from psycopg.types.json import Jsonb
 
 from backend.core.config import DATABASE_URL
 
@@ -93,6 +95,12 @@ def initialize_chat_memory() -> None:
                 ON chat_messages(session_id, id)
                 """
             )
+            # Per-message source citations (assistant rows only). Stored as the
+            # frozen Source shape so reopening a chat restores the same citations
+            # the live answer showed. Added by migration for existing installs.
+            cursor.execute(
+                "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS sources JSONB"
+            )
 
 
 def append_exchange(
@@ -100,18 +108,23 @@ def append_exchange(
     user_message: str,
     assistant_reply: str,
     owner_user_id: int | None = None,
+    sources: list[dict] | None = None,
 ) -> None:
     with _connect() as connection:
         with connection.cursor() as cursor:
             _ensure_session(cursor, session_id, owner_user_id)
+            # Citations belong to the assistant turn only; the user row stores NULL.
+            # Jsonb adapts the Python list to the jsonb column (parameterized, never
+            # string-interpolated — the SQL-injection invariant holds for JSON too).
+            assistant_sources = Jsonb(sources) if sources else None
             cursor.executemany(
                 """
-                INSERT INTO chat_messages (session_id, role, content)
-                VALUES (%s, %s, %s)
+                INSERT INTO chat_messages (session_id, role, content, sources)
+                VALUES (%s, %s, %s, %s)
                 """,
                 [
-                    (session_id, "user", user_message),
-                    (session_id, "assistant", assistant_reply),
+                    (session_id, "user", user_message, None),
+                    (session_id, "assistant", assistant_reply, assistant_sources),
                 ],
             )
             cursor.execute(
@@ -127,7 +140,7 @@ def _get_history(session_id: str, limit: int | None = None, include_ids: bool = 
         limit_clause = "LIMIT %s"
         params.append(limit)
 
-    selected_columns = "id, role, content" if include_ids else "role, content"
+    selected_columns = "id, role, content, sources" if include_ids else "role, content, sources"
 
     with _connect() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
@@ -135,7 +148,7 @@ def _get_history(session_id: str, limit: int | None = None, include_ids: bool = 
                 f"""
                 SELECT {selected_columns}
                 FROM (
-                    SELECT id, role, content
+                    SELECT id, role, content, sources
                     FROM chat_messages
                     WHERE session_id = %s
                     ORDER BY id DESC
