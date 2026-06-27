@@ -58,12 +58,12 @@ export function Sidebar() {
       {/* Persistent account bar (ChatGPT-style). */}
       <div className="mt-2 flex items-center gap-2 rounded-lg border border-hairline bg-surface px-2 py-2">
         <div className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-[12px] font-semibold uppercase text-white">
-          {(user?.role ?? "u")[0]}
+          {(user?.email ?? user?.role ?? "u")[0]}
         </div>
         <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-[13px] capitalize text-text-ink">{user?.role ?? "User"}</div>
+          <div className="truncate text-[13px] text-text-ink">{user?.email ?? "Account"}</div>
           <div className="text-[10px] uppercase tracking-wide text-text-tertiary">
-            {user?.region}
+            {user?.role} · {user?.region}
           </div>
         </div>
         <button

@@ -531,6 +531,11 @@ export interface components {
          */
         MeResponse: {
             /**
+             * Email
+             * @description Caller's email, when present in the token.
+             */
+            email?: string | null;
+            /**
              * Id
              * @description User id.
              */

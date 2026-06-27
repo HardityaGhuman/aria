@@ -77,6 +77,7 @@ def create_access_token(user: dict, expires_in_min: int | None = None) -> str:
         "sub": str(user["id"]),
         "role": user["role"],
         "region": user.get("region", _DEFAULT_REGION),
+        "email": user.get("email"),
         "type": "access",
         "jti": uuid.uuid4().hex,
         "exp": now + timedelta(minutes=minutes),
@@ -140,6 +141,7 @@ def get_current_user(
             "id": int(claims["sub"]),
             "role": claims["role"],
             "region": claims.get("region", _DEFAULT_REGION),
+            "email": claims.get("email"),
         }
     except (AuthError, KeyError, ValueError, TypeError) as exc:
         # AuthError = bad signature/expiry; the rest = a token whose payload is

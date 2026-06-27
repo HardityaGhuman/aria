@@ -53,6 +53,7 @@ class MeResponse(BaseModel):
     id: int = Field(..., description="User id.")
     role: str = Field(..., description="Caller's role.")
     region: str = Field(..., description="Caller's home region.")
+    email: str | None = Field(None, description="Caller's email, when present in the token.")
 
 
 class MessageResponse(BaseModel):
