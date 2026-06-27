@@ -40,4 +40,19 @@ describe("apiFetch", () => {
       status: 429,
     } as Partial<ApiError>);
   });
+
+  it("does not force JSON content-type on FormData bodies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const fd = new FormData();
+    fd.append("x", "y");
+    await apiFetch("/admin/documents/upload", { method: "POST", body: fd, auth: true });
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Headers;
+    expect(headers.get("Content-Type")).toBeNull();
+  });
 });
