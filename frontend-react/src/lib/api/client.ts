@@ -28,7 +28,10 @@ type FetchInit = RequestInit & { auth?: boolean };
 function withAuth(init: FetchInit): RequestInit {
   const headers = new Headers(init.headers);
   if (init.auth && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  // Only force JSON for string bodies; FormData must keep the browser-set
+  // multipart boundary, so don't touch its Content-Type.
+  if (init.body && typeof init.body === "string" && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
   return { ...init, headers, credentials: "include" };
 }
 

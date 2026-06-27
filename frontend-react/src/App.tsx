@@ -2,8 +2,10 @@ import { Routes, Route } from "react-router-dom";
 import Login from "./routes/Login";
 import Chat from "./routes/Chat";
 import History from "./routes/History";
-import { ComingSoon } from "./routes/ComingSoon";
+import Preferences from "./routes/Preferences";
+import AdminDocuments from "./routes/AdminDocuments";
 import { RequireAuth } from "./lib/auth/RequireAuth";
+import { RequireRole } from "./lib/auth/RequireRole";
 
 export default function App() {
   return (
@@ -29,10 +31,7 @@ export default function App() {
         path="/preferences"
         element={
           <RequireAuth>
-            <ComingSoon
-              title="Preferences"
-              blurb="Tone, length, and language controls for Aria's answers. Landing in the next build."
-            />
+            <Preferences />
           </RequireAuth>
         }
       />
@@ -40,10 +39,9 @@ export default function App() {
         path="/admin/documents"
         element={
           <RequireAuth>
-            <ComingSoon
-              title="HR Documents"
-              blurb="Upload, reindex, and manage the policy knowledge base. HR-only. Landing in the next build."
-            />
+            <RequireRole role="hr">
+              <AdminDocuments />
+            </RequireRole>
           </RequireAuth>
         }
       />
