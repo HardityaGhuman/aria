@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-hairline: #e8e8ed;
+  --color-ink: #1d1d1f;
+  --color-marigold: #f0a23c;
+  --color-text-ink: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #aeaeb2;
+  --color-badge-all: #e8e8ed;
+  --color-badge-manager: #f0a23c;
+  --color-badge-hr: #c2415b;
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "Geist", ui-monospace, monospace;
+
+  --radius-card: 0.875rem; /* ~14px, Stitch 12–16px container range */
+
+  --shadow-card: 0px 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+/* Fonts via CDN for dev; self-host before deploy. */
+@import url("https://rsms.me/inter/inter.css");
+@import url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-sans/style.css");
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-text-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
+}
