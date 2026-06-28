@@ -68,5 +68,12 @@ node_modules/
 .next/
 *.local
 
+# Playwright MCP run artifacts (screenshots/traces)
+.playwright-mcp/
+
+# Stray, unreferenced login background images dropped at repo root (not wired
+# into the frontend; real frontend assets live under frontend-react/).
+/login-bg.png
+/login-bg2.png
 
 .superpowers

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth/AuthContext";
 import { Button } from "../components/Button";
+import { AnimatedBackground } from "../components/AnimatedBackground";
 import { ApiError } from "../lib/api/client";
 
 export default function Login() {
@@ -30,8 +31,9 @@ export default function Login() {
     "w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-[15px] outline-none focus:border-ink";
 
   return (
-    <div className="flex h-full items-center justify-center bg-canvas">
-      <div className="w-[360px] rounded-card border border-hairline bg-surface p-8 shadow-card">
+    <div className="relative flex h-full items-center justify-center bg-canvas">
+      <AnimatedBackground />
+      <div className="relative w-[360px] rounded-card border border-hairline bg-surface p-8 shadow-card">
         <div className="mb-1 text-center text-[28px] font-bold tracking-tight">
           Aria<span className="text-marigold">.</span>
         </div>

@@ -30,3 +30,20 @@ def get_vector_store():
 def get_collection():
     """Underlying Chroma collection, used by the hybrid retriever and indexer."""
     return get_vector_store()._collection
+
+
+def indexed_sources() -> set[str]:
+    """Return the distinct ``source`` values (paths relative to docs/) that have
+    at least one chunk in the vector store.
+
+    Why: the admin document list merges on-disk files with the ``document_status``
+    table, but the seed corpus is built by the offline indexer, which never writes
+    that table — so those docs report ``unknown`` despite being fully indexed. This
+    asks Chroma what is actually indexed, the ground truth, so the UI can show
+    ``indexed`` for them. One metadata scan; fine at this corpus size."""
+    got = get_collection().get(include=["metadatas"])
+    return {
+        m["source"]
+        for m in (got.get("metadatas") or [])
+        if m and m.get("source")
+    }

@@ -74,9 +74,18 @@ def issue_tokens(user: dict, response: Response) -> str:
 
 def _check_origin(request: Request) -> None:
     """CSRF guard for the refresh endpoint: reject a cross-site Origin/Referer.
-    SameSite=Strict is the primary defense; this is defense-in-depth."""
-    origin = request.headers.get("origin") or request.headers.get("referer", "")
-    if origin and not origin.startswith(FRONTEND_ORIGIN):
+    SameSite=Strict is the primary defense; this is defense-in-depth.
+
+    Origin is matched EXACTLY (a prefix test let ``http://localhost:5173.evil.com``
+    pass). Referer is a full URL, so it must equal the origin or sit under it with
+    a real path separator — never just share a prefix."""
+    origin = request.headers.get("origin")
+    if origin is not None:
+        if origin != FRONTEND_ORIGIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bad origin")
+        return
+    referer = request.headers.get("referer", "")
+    if referer and referer != FRONTEND_ORIGIN and not referer.startswith(FRONTEND_ORIGIN + "/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bad origin")
 
 

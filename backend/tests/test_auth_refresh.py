@@ -19,7 +19,7 @@ def _creds(token: str) -> HTTPAuthorizationCredentials:
 def test_access_token_accepted_by_get_current_user():
     token = auth.create_access_token(USER)
     user = auth.get_current_user(_creds(token))
-    assert user == {"id": 1, "role": "employee", "region": "us"}
+    assert user == {"id": 1, "role": "employee", "region": "us", "email": None}
 
 
 def test_refresh_token_rejected_as_access_credential():

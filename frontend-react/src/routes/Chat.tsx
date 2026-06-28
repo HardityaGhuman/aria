@@ -7,6 +7,7 @@ import { SuggestionChips } from "../components/SuggestionChips";
 import { Markdown } from "../components/Markdown";
 import { AssistantAvatar } from "../components/AssistantAvatar";
 import { ResponseSources } from "../components/ResponseSources";
+import { AnimatedBackground } from "../components/AnimatedBackground";
 import { streamChat } from "../lib/api/sse";
 import { ensureSession } from "../lib/api/sessions";
 import { apiFetch } from "../lib/api/client";
@@ -123,7 +124,8 @@ export default function Chat() {
     <AppShell>
       <div className="flex h-full flex-col">
         {empty ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6">
+          <div className="relative flex flex-1 flex-col items-center justify-center gap-6">
+            <AnimatedBackground />
             <div className="text-2xl">✦</div>
             <h1 className="text-[24px] font-semibold tracking-tight">
               Good morning. How can I help you today?
@@ -133,7 +135,7 @@ export default function Chat() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-1 flex-col gap-7 overflow-y-auto px-2 pb-4 pt-4 pr-4">
+          <div className="flex flex-1 flex-col gap-7 overflow-y-auto px-2 pb-4 pt-4">
             {messages.map((m, i) => (
               <Bubble key={i} role={m.role} content={m.content} sources={m.sources} />
             ))}

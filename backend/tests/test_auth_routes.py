@@ -61,4 +61,4 @@ def test_me_returns_identity(monkeypatch):
     token = login.json()["access_token"]
     resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert resp.json() == {"id": 5, "role": "hr", "region": "us"}
+    assert resp.json() == {"id": 5, "role": "hr", "region": "us", "email": "hr@co.com"}

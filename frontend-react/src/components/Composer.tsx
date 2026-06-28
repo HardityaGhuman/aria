@@ -32,7 +32,7 @@ export function Composer({
       <button
         type="submit"
         disabled={disabled || !text.trim()}
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white disabled:opacity-40"
+        className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink disabled:opacity-40"
         aria-label="send"
       >
         ↑

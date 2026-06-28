@@ -35,7 +35,7 @@ def test_no_token_is_401():
 def test_valid_token_returns_identity():
     resp = client.get("/whoami", headers=_bearer(7, "employee"))
     assert resp.status_code == 200
-    assert resp.json() == {"id": 7, "role": "employee", "region": "us"}
+    assert resp.json() == {"id": 7, "role": "employee", "region": "us", "email": None}
 
 
 def test_garbage_token_is_401():
