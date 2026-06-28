@@ -21,7 +21,7 @@ filtering**. It is the foundation for a larger serverless build-out — see
 | Auth | JWT (PyJWT, HS256) + bcrypt; short access token + rotating refresh token (HttpOnly cookie); 3-tier RBAC (employee / manager / HR) + per-user region (US / India) |
 | Streaming | Server-Sent Events (`sse-starlette`) for token-by-token answers |
 | Rate limiting | Per-user / per-IP at the API edge (`slowapi`) |
-| Frontend | Streamlit (throwaway; a React frontend is planned) |
+| Frontend | React + Vite + TanStack Query (`frontend-react/`, dark mode, SSE streaming); a legacy Streamlit UI remains for quick local testing |
 | Vector DB | ChromaDB (cosine distance, via `langchain-chroma`) |
 | Hybrid retrieval | BM25 (`rank_bm25`) + vector search, fused with Reciprocal Rank Fusion |
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`, via `langchain-huggingface`) |
@@ -230,6 +230,8 @@ Seeded accounts (all password `Test1234!`): `hr@gsvh.test` (hr, us),
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed browser origin (CORS + refresh CSRF check) |
 | `RATE_LIMIT_CHAT` | `30/minute` | Per-user/IP limit on `/chat` + `/chat/stream` |
 | `RATE_LIMIT_LOGIN` | `10/minute` | Per-IP limit on `/auth/login` |
+| `RATE_LIMIT_ADMIN` | `10/minute` | Per-user/IP limit on `/admin` document upload + reindex |
+| `MAX_UPLOAD_BYTES` | `10485760` | Hard cap (10 MiB) on a single uploaded document |
 | `LLM_MAX_RETRIES` | `2` | Transient-error retries (exponential backoff) |
 | `LLM_CONTEXT_TOKEN_BUDGET` | `6000` | Retrieved context is truncated to this token budget |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence-transformers embedding model |
@@ -278,14 +280,14 @@ The full typed contract is frozen at [`docs/api/openapi.json`](docs/api/openapi.
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `POST` | `/chat` | bearer | Ask a question → response envelope (tier + region filtered) |
-| `POST` | `/chat/stream` | bearer | Same as `/chat` but streams tokens over SSE (`token`/`sources`/`done`/`error`) |
+| `POST` | `/chat` | bearer (own/new session) | Ask a question → response envelope (tier + region filtered) |
+| `POST` | `/chat/stream` | bearer (own/new session) | Same as `/chat` but streams tokens over SSE (`token`/`sources`/`done`/`error`) |
 | `GET` | `/chat/sessions` | bearer | List the caller's own conversations |
 | `POST` | `/chat/sessions` | bearer | Create a new conversation |
 | `PATCH` | `/chat/sessions/{id}` | bearer (owner) | Rename a conversation |
 | `DELETE` | `/chat/sessions/{id}` | bearer (owner) | Delete a conversation + its messages |
-| `GET` | `/chat/history/{session_id}` | bearer | Get persisted session chat history |
-| `DELETE` | `/chat/history/{session_id}` | bearer | Clear persisted session chat history |
+| `GET` | `/chat/history/{session_id}` | bearer (owner) | Get persisted session chat history |
+| `DELETE` | `/chat/history/{session_id}` | bearer (owner) | Clear persisted session chat history |
 
 **Me / Admin / Ops**
 
@@ -334,12 +336,12 @@ step-by-step in [`PROGRESS.md`](PROGRESS.md). In short:
 
 0. Multi-source, multi-format corpus + ingestion — ✅
 1. JWT auth + 3-tier RBAC + region filtering — ✅
-2. Security & resilience (rate limiting, LLM retry/backoff, context truncation, CORS lockdown) — ✅
+2. Security & resilience (rate limiting, LLM retry/backoff, CORS; + prompt-injection defense, session object-auth/IDOR fix, upload caps) — ✅
 3. User preferences in PostgreSQL — ✅
 4. Retrieval-quality inspection (eval harness; structural fixes already in) — 🔄
 5. Observability — 🔄 (response envelope ✅; telemetry + metrics pending)
 6. Admin document lifecycle (upload / status / delete / reindex) — ✅
-7. React frontend — ⬜ NEXT (binds the frozen `docs/api/openapi.json`)
+7. React frontend (chat+SSE, sessions, prefs, HR admin docs, dark mode) — 🔄 built
 8. pgvector migration + Cloud Run deploy
 9. Background workers / event-based ingestion
 
@@ -357,3 +359,13 @@ refresh-token rotation + HttpOnly cookie, SSE streaming, user-owned sessions
   PDFs); the generated vector store (`backend/data/chroma_db/`) and the archived
   reference PDF (`backend/data/docs_archive/`) are gitignored.
 - `backend/.env` is gitignored — `JWT_SECRET` and API keys are never committed.
+- **Security posture.** Layered prompt-injection defense (fixed-persona/no-leak
+  system rules + a per-request **nonced** context fence + an integrity preamble on
+  every LLM route, since conversation history is itself an injection surface).
+  Session endpoints enforce **object-level authorization** (a user can only read,
+  send into, or clear their own sessions — see `backend/tests/test_idor.py`).
+  Uploads are HR-gated with a size cap, overwrite protection, and a rate limit;
+  the refresh endpoint exact-matches its CSRF Origin. SQL is fully parameterized
+  and JWTs are verified with an explicit algorithm allow-list. Prompt-level
+  defenses are probabilistic — the hard guarantees remain the RBAC tier partition
+  and JWT-derived identity.

@@ -25,12 +25,14 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
 
 from backend.core.auth import require_role
-from backend.core.config import DOCS_PATH
+from backend.core.config import DOCS_PATH, MAX_UPLOAD_BYTES, RATE_LIMIT_ADMIN
+from backend.core.ratelimit import limiter
 from backend.core.doc_status import (
     all_statuses,
     delete_status,
@@ -51,6 +53,7 @@ from backend.rag.indexing import (
     list_policy_documents,
 )
 from backend.rag.loaders import SUPPORTED_EXTENSIONS
+from backend.rag.vector_store import indexed_sources
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -89,7 +92,9 @@ def _index_document(rel_path: str) -> None:
 
 
 @router.post("/documents/upload", response_model=UploadResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(RATE_LIMIT_ADMIN)
 async def upload_document(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     department: str = Form(...),
@@ -115,8 +120,30 @@ async def upload_document(
     rel_path = f"{dept}/{filename}"
     target = _resolve_under_docs(rel_path)
 
+    # Don't silently clobber an existing policy. Updating a doc is an explicit
+    # delete-then-upload, so a same-name collision is almost always a mistake.
+    if os.path.exists(target):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"A document already exists at {rel_path!r}. Delete it first to replace it.",
+        )
+
+    # Bounded read: stream in chunks and abort past the cap so an oversized upload
+    # can't buffer unbounded into memory (DoS). UploadFile.size is advisory, so we
+    # enforce on the actual bytes read.
+    contents = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        contents.extend(chunk)
+        if len(contents) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit.",
+            )
+
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    contents = await file.read()
     with open(target, "wb") as handle:
         handle.write(contents)
 
@@ -128,20 +155,37 @@ async def upload_document(
 
 @router.get("/documents", response_model=list[DocumentInfo])
 def list_documents(_: dict = Depends(require_role("hr"))):
-    """List every corpus document, merging on-disk facts with ingestion status."""
+    """List every corpus document, merging on-disk facts with ingestion status.
+
+    Status precedence: a ``document_status`` row (live lifecycle: queued/
+    processing/failed from the admin upload path) wins. Docs with no row are the
+    offline-indexed seed corpus, which the tracking table never sees — for those we
+    ask Chroma directly: chunks present => ``indexed``, else ``unknown``. Without
+    this, the whole seed corpus showed ``unknown`` despite being fully searchable."""
     statuses = all_statuses()
+    try:
+        indexed = indexed_sources()
+    except Exception:
+        # A status nicety must never break the list; fall back to "unknown".
+        logger.warning("Could not read indexed sources from Chroma", exc_info=True)
+        indexed = set()
     documents = []
     for doc in list_policy_documents():
         rel_path = doc["filename"]
         st = statuses.get(rel_path)
+        if st:
+            doc_status, error = st["status"], st.get("error")
+        else:
+            doc_status = "indexed" if rel_path in indexed else "unknown"
+            error = None
         documents.append(
             DocumentInfo(
                 document_id=rel_path,
                 department=doc["department"],
                 type=doc["type"],
                 size_bytes=doc["size_bytes"],
-                status=st["status"] if st else "unknown",
-                error=st.get("error") if st else None,
+                status=doc_status,
+                error=error,
                 updated_at=st["updated_at"].isoformat() if st and st.get("updated_at") else None,
             )
         )
@@ -176,7 +220,8 @@ def delete_document(document_id: str, _: dict = Depends(require_role("hr"))):
 
 
 @router.post("/reindex", response_model=ReindexResponse)
-def reindex(_: dict = Depends(require_role("hr"))):
+@limiter.limit(RATE_LIMIT_ADMIN)
+def reindex(request: Request, _: dict = Depends(require_role("hr"))):
     """Rebuild the index from the corpus (hash-skip aware; only changed files re-embed)."""
     try:
         stats = initialize_vectorstore()

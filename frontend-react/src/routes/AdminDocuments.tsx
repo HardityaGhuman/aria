@@ -20,9 +20,13 @@ export default function AdminDocuments() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [dept, setDept] = useState("hr");
+  // Doubles as the table's department filter ("all" = no filter) and the upload
+  // target. Upload is blocked while "all" is selected (no concrete department).
+  const [dept, setDept] = useState("all");
   const fileRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // document_id pending delete confirmation (inline, mirrors the sidebar chat list).
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const { data } = useQuery({
     queryKey: ["documents"],
@@ -56,10 +60,11 @@ export default function AdminDocuments() {
 
   const rows = useMemo(() => {
     let r = data ?? [];
+    if (dept !== "all") r = r.filter((d) => d.department === dept);
     if (statusFilter !== "all") r = r.filter((d) => d.status === statusFilter);
     if (search.trim()) r = r.filter((d) => d.document_id.toLowerCase().includes(search.toLowerCase()));
     return r;
-  }, [data, statusFilter, search]);
+  }, [data, dept, statusFilter, search]);
 
   return (
     <AppShell>
@@ -84,7 +89,13 @@ export default function AdminDocuments() {
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) upload.mutate({ file: f });
+                if (f) {
+                  if (dept === "all") {
+                    setNotice("Pick a department before uploading.");
+                  } else {
+                    upload.mutate({ file: f });
+                  }
+                }
                 e.target.value = "";
               }}
             />
@@ -102,8 +113,9 @@ export default function AdminDocuments() {
             value={dept}
             onChange={(e) => setDept(e.target.value)}
             className="rounded-lg border border-hairline bg-surface px-3 py-2 text-[14px] outline-none focus:border-ink"
-            title="Upload department"
+            title="Filter the list by department; also the target department for uploads"
           >
+            <option value="all">All departments</option>
             {DEPARTMENTS.map((d) => (
               <option key={d} value={d}>
                 {d}
@@ -152,15 +164,37 @@ export default function AdminDocuments() {
                     {d.updated_at ? new Date(d.updated_at).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      className="text-text-tertiary hover:text-badge-hr"
-                      aria-label="delete"
-                      onClick={() => {
-                        if (confirm(`Delete ${d.document_id}?`)) del.mutate(d.document_id);
-                      }}
-                    >
-                      ×
-                    </button>
+                    {confirming === d.document_id ? (
+                      <span className="inline-flex items-center gap-1.5 text-[12px]">
+                        <span className="text-text-tertiary">Delete?</span>
+                        <button
+                          className="font-medium text-badge-hr hover:underline"
+                          aria-label="confirm delete"
+                          onClick={() => {
+                            del.mutate(d.document_id);
+                            setConfirming(null);
+                          }}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          className="text-text-tertiary hover:text-text-ink"
+                          aria-label="cancel delete"
+                          onClick={() => setConfirming(null)}
+                        >
+                          No
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="text-text-tertiary hover:text-badge-hr"
+                        aria-label="delete"
+                        title="Delete"
+                        onClick={() => setConfirming(d.document_id)}
+                      >
+                        ×
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

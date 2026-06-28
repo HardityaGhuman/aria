@@ -18,6 +18,12 @@ LLM_CONTEXT_TOKEN_BUDGET = int(os.getenv("LLM_CONTEXT_TOKEN_BUDGET", "6000"))
 # Rate limits (slowapi syntax). Protect the backend + the LLM budget.
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "30/minute")
 RATE_LIMIT_LOGIN = os.getenv("RATE_LIMIT_LOGIN", "10/minute")
+# HR-only admin mutations (upload/reindex). Expensive (full reindex), so capped
+# even though the endpoints are already role-gated.
+RATE_LIMIT_ADMIN = os.getenv("RATE_LIMIT_ADMIN", "10/minute")
+# Hard cap on a single uploaded document. Without it, `await file.read()` buffers
+# the whole upload in memory — an oversized file is a memory-exhaustion DoS.
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MiB
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_chatbot")
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")

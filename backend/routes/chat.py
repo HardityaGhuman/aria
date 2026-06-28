@@ -47,6 +47,19 @@ def _require_owned_session(session_id: str, user: dict) -> None:
         raise HTTPException(status_code=403, detail="Not your session.")
 
 
+def _require_owned_or_new_session(session_id: str, user: dict) -> None:
+    """Gate for the chat send path: allow a brand-new session (no owner yet — it
+    will be stamped to the caller on first write) or one the caller already owns,
+    but reject sending into someone else's session.
+
+    Without this, user A could POST a message into user B's ``session_id``: B's
+    history loads as context and a ``meta`` question ("recap our conversation")
+    reads B's private messages back to A. A read-as-write IDOR."""
+    owner = session_store.owner_of(session_id)
+    if owner is not None and owner != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your session.")
+
+
 def _to_sources(raw: list[dict]) -> list[Source]:
     """Map the retriever's per-chunk dicts onto the frozen ``Source`` shape."""
     sources = []
@@ -72,6 +85,7 @@ async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_curr
 
     The user's role gates which document tiers are retrievable (RBAC).
     """
+    _require_owned_or_new_session(req.session_id, user)
     started = time.perf_counter()
     result = await generate_chat_reply(
         req.session_id,
@@ -99,6 +113,8 @@ async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(g
     (token/sources/done/error). The service yields event dicts with a structured
     ``data`` payload; here we JSON-encode that payload onto the SSE ``data`` field.
     """
+    _require_owned_or_new_session(req.session_id, user)
+
     async def event_publisher():
         async for event in stream_chat_reply(
             req.session_id,
@@ -164,8 +180,9 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
 
 
 @router.get("/history/{session_id}", response_model=HistoryResponse)
-async def get_history(session_id: str):
-    """Retrieve conversation history for a session."""
+async def get_history(session_id: str, user: dict = Depends(get_current_user)):
+    """Retrieve conversation history for one of the caller's own sessions."""
+    _require_owned_session(session_id, user)
     try:
         history = get_session_history(session_id)
     except ChatMemoryError as e:
@@ -174,8 +191,9 @@ async def get_history(session_id: str):
 
 
 @router.delete("/history/{session_id}", response_model=MessageResponse)
-async def clear_history(session_id: str):
-    """Clear conversation history for a session."""
+async def clear_history(session_id: str, user: dict = Depends(get_current_user)):
+    """Clear conversation history for one of the caller's own sessions."""
+    _require_owned_session(session_id, user)
     try:
         clear_session_history(session_id)
     except ChatMemoryError as e:

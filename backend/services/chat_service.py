@@ -268,9 +268,14 @@ async def generate_chat_reply(
     if classification == "out_of_scope":
         result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
     elif classification == "chitchat":
+        # Pass preferences (language) so a greeting honors the same language as
+        # policy/meta answers — otherwise the language setting appears to apply at
+        # random because only some routes respected it.
+        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
         reply = await _run_blocking(
             get_chitchat_response,
             message,
+            pref_note,
             timeout_detail="The language model timed out. Please try again.",
         )
         result = ChatResult(reply, "", [], status="ok")
@@ -398,7 +403,8 @@ async def stream_chat_reply(
             return
 
         if classification == "chitchat":
-            answer = await asyncio.to_thread(get_chitchat_response, message)
+            pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+            answer = await asyncio.to_thread(get_chitchat_response, message, pref_note)
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}

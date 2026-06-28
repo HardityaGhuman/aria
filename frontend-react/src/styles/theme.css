@@ -44,6 +44,68 @@ body,
 #root {
   height: 100%;
 }
+
+/* Themed scrollbar — thin, rounded, token-colored (so it goes dark in dark
+   mode), with a transparent inset border so the thumb never hugs the content. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+  background-clip: content-box;
+}
+
+/* Make Tailwind's `dark:` variant follow our `.dark` class (not OS preference),
+   so the Aurora background's dark variants match the app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Aurora background palette — neutral base + marigold accent (replaces the
+   Aceternity blue/indigo/violet). Referenced by the AuroraBackground component. */
+:root {
+  --white: #ffffff;
+  --black: #000000;
+  --transparent: transparent;
+  --aurora-1: #f0a23c;
+  --aurora-2: #f7c576;
+  --aurora-3: #e89028;
+  --aurora-4: #ffe0b0;
+  --aurora-5: #d97a1e;
+}
+
+@keyframes aurora {
+  from {
+    background-position:
+      50% 50%,
+      50% 50%;
+  }
+  to {
+    background-position:
+      350% 50%,
+      350% 50%;
+  }
+}
+.animate-aurora {
+  animation: aurora 60s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-aurora {
+    animation: none;
+  }
+}
 body {
   margin: 0;
   background: var(--color-canvas);
