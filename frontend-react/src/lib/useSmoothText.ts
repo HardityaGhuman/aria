@@ -21,8 +21,10 @@ export function useSmoothText() {
       raf.current = null;
       return;
     }
-    // Reveal proportionally so big backlogs catch up fast, small ones stay smooth.
-    const step = Math.max(2, Math.ceil(remaining * 0.18));
+    // Reveal proportionally, but gently: ~10% of the backlog per frame, at least
+    // 1 char and capped at 4 so even a large burst types out calmly (easier on
+    // the eye) instead of dumping. ~60fps → up to ~240 chars/s, easing to ~60/s.
+    const step = Math.min(4, Math.max(1, Math.ceil(remaining * 0.1)));
     shownLen.current = Math.min(target.current.length, shownLen.current + step);
     setShown(target.current.slice(0, shownLen.current));
     raf.current = requestAnimationFrame(tick);

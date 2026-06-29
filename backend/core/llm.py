@@ -252,8 +252,11 @@ User said:
     return response.choices[0].message.content.strip()
 
 
-def get_meta_response(user_message: str, history: list[dict]) -> str:
-    """Answer conversation-history questions without retrieved policy context."""
+def get_meta_response(user_message: str, history: list[dict], preferences: str | None = None) -> str:
+    """Answer conversation-history questions without retrieved policy context.
+
+    ``preferences`` (length/tone/language) is folded into the system prompt so it
+    carries top-level authority instead of being a weak trailing history turn."""
     prompt = f"""### 1. Persona
 You are Aria, an internal company policy assistant, replying to a question about the current chat itself rather than about policy documents.
 
@@ -264,18 +267,19 @@ Answer the user's question using only the conversation history provided in the m
 - Use only the conversation transcript; do not consult, infer, or cite policy documents.
 - Do not mention retrieved context, excerpts, or any implementation detail.
 - Do not add a "Not found in the provided documents" section.
+- Honor any user-preference note in the conversation (length, tone, language). If it asks for a concise answer, keep it tight.
+- Never repeat the same point in different words; each line must add something new.
 
 ### 4. Format
-Respond in concise Markdown: one direct sentence, with short bullets only if they add distinct detail.
+Respond in clean, concise Markdown: one direct sentence, then short bullets only if they add distinct detail. **Bold** the few key terms or figures worth scanning; use *italics* sparingly. Do not over-format.
 
 ### 5. Input
 User question:
 {user_message}"""
-    messages = _build_messages(
-        _INTEGRITY_PREAMBLE + "\n\nYou answer questions about the current chat history only.",
-        prompt,
-        history,
-    )
+    system = _INTEGRITY_PREAMBLE + "\n\nYou answer questions about the current chat history only."
+    if preferences:
+        system += f"\n\n{preferences}"
+    messages = _build_messages(system, prompt, history)
     response = litellm.completion(
         model=MODEL_NAME,
         messages=messages,
@@ -318,7 +322,22 @@ Employee question:
 {close_tag}"""
 
 
-def get_llm_response(user_message: str, context: str, history: list[dict]) -> str:
+def _system_prompt_with_preferences(preferences: str | None) -> str:
+    """Base persona prompt plus the caller's preference directive (if any).
+
+    Folding preferences into the system prompt — rather than appending a trailing
+    system turn after the conversation history — gives the length/tone/language
+    directive top-level authority. A trailing note buried under a long English
+    history was reliably under-weighted, so the model kept answering in English."""
+    system_prompt = load_system_prompt()
+    if preferences:
+        system_prompt += f"\n\n{preferences}"
+    return system_prompt
+
+
+def get_llm_response(
+    user_message: str, context: str, history: list[dict], preferences: str | None = None
+) -> str:
     """
     Send a message to the LLM with RAG context injected using litellm.
 
@@ -326,11 +345,12 @@ def get_llm_response(user_message: str, context: str, history: list[dict]) -> st
         user_message: The user's latest query.
         context: Retrieved document chunks from ChromaDB.
         history: List of {"role": "user"/"assistant", "content": text} dicts.
+        preferences: Optional length/tone/language directive folded into the system prompt.
 
     Returns:
         The model's response as a string.
     """
-    system_prompt = load_system_prompt()
+    system_prompt = _system_prompt_with_preferences(preferences)
     augmented_message = _augmented_message(user_message, context)
 
     messages = _build_messages(system_prompt, augmented_message, history)
@@ -346,14 +366,16 @@ def get_llm_response(user_message: str, context: str, history: list[dict]) -> st
     return response.choices[0].message.content
 
 
-def stream_llm_response(user_message: str, context: str, history: list[dict]):
+def stream_llm_response(
+    user_message: str, context: str, history: list[dict], preferences: str | None = None
+):
     """Yield the answer token-by-token (LiteLLM ``stream=True``).
 
     Same prompt construction as ``get_llm_response`` — only the transport differs:
     this returns incremental text deltas so the API can push tokens over SSE as
     the model produces them, instead of blocking until the full answer is ready.
     """
-    system_prompt = load_system_prompt()
+    system_prompt = _system_prompt_with_preferences(preferences)
     augmented_message = _augmented_message(user_message, context)
 
     messages = _build_messages(system_prompt, augmented_message, history)

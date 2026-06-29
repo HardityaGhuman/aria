@@ -58,6 +58,30 @@ from backend.rag.vector_store import indexed_sources
 logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
+# Allow-lists for the metadata an HR uploader may stamp on a document. Kept in
+# lock-step with the retrieval filters: access_tier mirrors auth._ROLE_TIERS,
+# region mirrors auth.regions_for_user, status mirrors the loader's status field.
+VALID_ACCESS_TIERS = {"all", "manager", "hr_only"}
+VALID_REGIONS = {"global", "us", "india"}
+VALID_STATUSES = {"active", "superseded"}
+
+
+def _write_sidecar(target: str, *, department: str, access_tier: str, region: str, status: str) -> None:
+    """Write a ``<target>.meta.yaml`` sidecar carrying the uploader's metadata.
+
+    Every uploaded format reads this sidecar (the loader merges it; inline md/txt
+    frontmatter still wins). This is the single place portal-set tier/region/status
+    is persisted, so an HR upload can tier a csv/xlsx/pdf that has no inline block.
+    """
+    lines = [
+        f"department: {department}",
+        f"access_tier: {access_tier}",
+        f"region: {region}",
+        f"status: {status}",
+    ]
+    with open(target + ".meta.yaml", "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
 
 def _resolve_under_docs(rel_path: str) -> str:
     """Resolve ``rel_path`` against DOCS_PATH and refuse anything that escapes it.
@@ -98,9 +122,17 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     department: str = Form(...),
+    access_tier: str = Form("all"),
+    region: str = Form("global"),
+    doc_status: str = Form("active"),
     _: dict = Depends(require_role("hr")),
 ):
-    """Accept a document, store it under ``docs/<department>/``, queue ingestion."""
+    """Accept a document, store it under ``docs/<department>/``, queue ingestion.
+
+    ``access_tier``/``region``/``doc_status`` are stamped into a ``.meta.yaml``
+    sidecar so the uploader can tier any format (csv/xlsx/pdf carry no inline
+    frontmatter); for md/txt an inline frontmatter block still takes precedence.
+    """
     filename = os.path.basename(file.filename or "")
     if not filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing filename.")
@@ -116,6 +148,18 @@ async def upload_document(
     dept = department.strip()
     if not dept or "/" in dept or "\\" in dept or dept.startswith("."):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid department.")
+
+    # Validate the metadata against the same allow-lists the retrieval filters use.
+    # A bad tier must never reach Chroma metadata where it could mis-gate access.
+    access_tier = access_tier.strip()
+    region = region.strip()
+    doc_status = doc_status.strip()
+    if access_tier not in VALID_ACCESS_TIERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid access_tier. Allowed: {sorted(VALID_ACCESS_TIERS)}.")
+    if region not in VALID_REGIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid region. Allowed: {sorted(VALID_REGIONS)}.")
+    if doc_status not in VALID_STATUSES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid status. Allowed: {sorted(VALID_STATUSES)}.")
 
     rel_path = f"{dept}/{filename}"
     target = _resolve_under_docs(rel_path)
@@ -146,6 +190,7 @@ async def upload_document(
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "wb") as handle:
         handle.write(contents)
+    _write_sidecar(target, department=dept, access_tier=access_tier, region=region, status=doc_status)
 
     set_status(rel_path, "queued")
     background_tasks.add_task(_index_document, rel_path)
@@ -214,6 +259,9 @@ def delete_document(document_id: str, _: dict = Depends(require_role("hr"))):
     removed = delete_document_chunks(document_id)
     if os.path.exists(target):
         os.remove(target)
+    # Remove the companion metadata sidecar too, so a re-upload starts clean.
+    if os.path.exists(target + ".meta.yaml"):
+        os.remove(target + ".meta.yaml")
     delete_status(document_id)
     logger.info("Deleted document %s (%d chunks)", document_id, removed)
     return DeleteResponse(document_id=document_id, deleted_chunks=removed)

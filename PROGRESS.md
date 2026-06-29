@@ -72,7 +72,7 @@ prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
 error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
 A **security-hardening pass** then closed step 2's deferred items and an audit's
-findings (see *Security hardening* below). **All 91 backend tests pass.** Next
+findings (see *Security hardening* below). **All 98 backend tests pass.** Next
 planned focus: **step 8 — pgvector + Cloud Run**.
 
 ---
@@ -93,12 +93,25 @@ Layered prompt-injection defense + an authorization audit:
   read/wipe/inject into another's session. All now gated (own-or-new for sends,
   owner-only for history). Regression test: `backend/tests/test_idor.py`.
 - **Upload hardening.** Bounded chunked read with a `MAX_UPLOAD_BYTES` cap (memory
-  DoS), 409 on overwrite, `RATE_LIMIT_ADMIN` on upload + reindex.
+  DoS), 409 on overwrite, `RATE_LIMIT_ADMIN` on upload + reindex. Portal-set
+  `access_tier`/`region`/`status` are validated against the same allow-lists the
+  retrieval filters use before they reach Chroma metadata (a bad tier can't
+  mis-gate access).
 - **CSRF.** Refresh Origin now exact-matched (prefix test let `…5173.evil.com`
   through); Referer needs a real path boundary.
+- **Rate-limit bypass (MEDIUM, fixed).** The limiter keyed on the raw Bearer
+  token, and `/auth/refresh` mints a fresh token each call — so refresh-then-spam
+  handed out a new bucket per rotation, defeating the chat limit. Now keyed on the
+  stable `sub` claim (bucket follows the user), and `/auth/refresh` + `/auth/logout`
+  are themselves rate-limited. Regression: `backend/tests/test_ratelimit.py`.
 - **Verified clean:** no secrets tracked (only `.env.example`), SQL fully
   parameterized, JWT HS256 with explicit `algorithms=[…]` (no `alg:none`), bcrypt +
-  timing-equalized login, refresh rotation + jti revocation, CORS single-origin.
+  timing-equalized login, refresh rotation + jti revocation, CORS single-origin,
+  500s logged server-side and never leaked to clients.
+- **Open, deferred to step 8 (serverless-coupled):** the slowapi limiter is
+  in-process — needs a shared store (Redis/Memorystore) under multi-instance Cloud
+  Run; stateless access tokens mean up to a full TTL (30 min) of stale access for a
+  revoked/role-changed user (shorten TTL or add a deny-list at deploy).
 
 ---
 
@@ -108,11 +121,11 @@ Layered prompt-injection defense + an authorization audit:
 |---|------|--------|-------|
 | 0 | Multi-source corpus + ingestion | ✅ | GSVH Corp corpus: 7 dept folders, ~30 docs across `.md`/`.txt`/`.pdf`/`.csv`/`.xlsx`. Frontmatter `department`/`access_tier`/`region`/`doc_type`/`version`/`status`; tabular + PDF use `.meta.yaml` sidecars. CSV/XLSX ingested rows-as-chunks. Specs: `2026-06-23`, `2026-06-24`. |
 | 1 | Auth + RBAC + region | ✅ | bcrypt + JWT, `get_current_user`/`require_role`, `/auth/login`, `/auth/me` (id+role+region), HR-gated `/admin/reindex`. **3-tier RBAC** (`tiers_for_role`: employee→all, manager→all+manager, HR→all+manager+hr_only) enforced as a single app-layer **retriever partition** (security invariant unit-tested). **Region filter** (global + home region) + **superseded** exclusion as Chroma filters. Graceful **confidential message** when only restricted docs match. Specs: `2026-06-24`, `2026-06-25`. |
-| 2 | Security & resilience | ✅ | SQL injection already safe (parameterized — invariant). **Done:** per-user/IP rate limiting (slowapi), LLM retry/backoff, context truncation, CORS lockdown + `/auth/refresh` CSRF (now exact-Origin). **Now also done (hardening pass):** layered prompt-injection defense (section-0 rules + per-request nonced context fence + integrity preamble on meta/chitchat/summary), **session object-auth/IDOR fix** (`test_idor.py`), upload caps (`MAX_UPLOAD_BYTES`, overwrite-409, `RATE_LIMIT_ADMIN`). **Deferred:** RPM/RPD budgeting. |
-| 3 | User preferences | ✅ | `user_preferences` table; `GET/PUT /me/preferences`; tone/length/language injected into the answer prompt (best-effort — a prefs DB hiccup never breaks a chat). |
+| 2 | Security & resilience | ✅ | SQL injection already safe (parameterized — invariant). **Done:** per-user/IP rate limiting (slowapi), LLM retry/backoff, context truncation, CORS lockdown + `/auth/refresh` CSRF (now exact-Origin). **Now also done (hardening pass):** layered prompt-injection defense (section-0 rules + per-request nonced context fence + integrity preamble on meta/chitchat/summary), **session object-auth/IDOR fix** (`test_idor.py`), upload caps (`MAX_UPLOAD_BYTES`, overwrite-409, `RATE_LIMIT_ADMIN`), **rate-limit key fix** (per-`sub` not per-token; `/auth/refresh`+`/auth/logout` limited — closes the refresh-then-spam bypass; `test_ratelimit.py`). **Deferred (step 8):** shared-store limiter for multi-instance, short-TTL/deny-list for instant revocation; RPM/RPD budgeting. |
+| 3 | User preferences | ✅ | `user_preferences` table; `GET/PUT /me/preferences`; tone/length/language **folded into the system prompt** (not a trailing history turn — that was under-weighted, so language/length appeared ignored), best-effort (a prefs DB hiccup never breaks a chat). Regional English variants normalized to the default so a length-only change emits no redundant language directive. |
 | 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Pending:** run offline eval harness (recall@k/MRR/context-recall + RAGAS), cross-encoder reranker, vocabulary-gap recall, router contextual-compression — all eval-gated. |
 | 5 | Observability | 🔄 | **Done:** standardized response envelope (`answer`/`sources[document_id,file,section,source_type]`/`latency_ms`/`session_id`/`status`) + uniform error body. **Pending:** per-query telemetry log; monitoring metrics (P95/P99, no-answer rate, LLM-failure rate, cost/query). |
-| 6 | Admin document lifecycle | ✅ | `POST /admin/documents/upload` (multipart, background ingest), `GET /admin/documents` (+status), `GET …/{id}/status`, `DELETE …/{id}` (file + chunks), `POST /admin/reindex`. Per-doc `queued→processing→indexed→failed` in `document_status`. **Deferred:** object storage (S3); ingestion stays synchronous-in-background for now. |
+| 6 | Admin document lifecycle | ✅ | `POST /admin/documents/upload` (multipart, background ingest), `GET /admin/documents` (+status), `GET …/{id}/status`, `DELETE …/{id}` (file + chunks), `POST /admin/reindex`. Per-doc `queued→processing→indexed→failed` in `document_status`. Upload accepts `access_tier`/`region`/`status` form fields written to a `.meta.yaml` sidecar, so HR can tier any format (csv/xlsx/pdf carry no inline frontmatter) from the portal; md/txt inline frontmatter still wins. **Deferred:** object storage (S3); ingestion stays synchronous-in-background for now. |
 | 7 | React frontend | 🔄 built | React + Vite + TanStack Query app (`frontend-react/`) consuming auth (login/refresh), chat with **SSE streaming**, session list (rename/inline-delete), preferences, and the HR document portal (upload/list/status/delete/reindex). Dark mode, per-response sources, department filter. Remaining polish tracked ad hoc. |
 | 8 | pgvector migration + Cloud Run deploy | ⏳ | Vectors off local Chroma into Postgres; the serverless cutover and hard hosting blocker. |
 | 9 | Background workers / event ingestion | ⏳ | Cron → webhook (event-based); backend polls document-status endpoint, advances when `indexed`. |

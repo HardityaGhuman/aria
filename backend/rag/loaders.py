@@ -174,6 +174,9 @@ def load_document(filepath: str, department_fallback: str = "") -> list[Document
         frontmatter = {**_read_sidecar(filepath), **frontmatter}
     elif extension in {".md", ".txt"}:
         docs, frontmatter = _load_text_like(filepath)
+        # Inline frontmatter wins, but a portal-written sidecar fills any gap so
+        # md/txt uploaded without a frontmatter block still pick up their tier.
+        frontmatter = {**_read_sidecar(filepath), **frontmatter}
     elif extension == ".csv":
         docs, frontmatter = _load_csv_file(filepath)
     elif extension == ".xlsx":

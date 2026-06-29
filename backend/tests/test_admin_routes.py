@@ -72,6 +72,35 @@ def test_upload_saves_file_and_returns_queued(tmp_path, monkeypatch):
     assert (tmp_path / "hr" / "policy.md").read_bytes() == b"# Policy\nbody"
 
 
+def test_upload_writes_metadata_sidecar(tmp_path, monkeypatch):
+    monkeypatch.setattr(admin, "DOCS_PATH", str(tmp_path))
+    monkeypatch.setattr(admin, "set_status", lambda *a, **k: None)
+    monkeypatch.setattr(admin, "initialize_vectorstore", lambda: {"indexed": 1, "skipped": 0, "deleted": 0})
+
+    resp = client.post(
+        "/admin/documents/upload",
+        headers=_bearer("hr"),
+        files={"file": ("bands.csv", b"a,b\n1,2", "text/csv")},
+        data={"department": "finance", "access_tier": "hr_only", "region": "india", "doc_status": "active"},
+    )
+    assert resp.status_code == 202
+    sidecar = (tmp_path / "finance" / "bands.csv.meta.yaml").read_text()
+    assert "access_tier: hr_only" in sidecar
+    assert "region: india" in sidecar
+    assert "department: finance" in sidecar
+
+
+def test_upload_rejects_invalid_access_tier(tmp_path, monkeypatch):
+    monkeypatch.setattr(admin, "DOCS_PATH", str(tmp_path))
+    resp = client.post(
+        "/admin/documents/upload",
+        headers=_bearer("hr"),
+        files={"file": ("policy.md", b"x", "text/markdown")},
+        data={"department": "hr", "access_tier": "root"},
+    )
+    assert resp.status_code == 400
+
+
 def test_upload_rejects_unsupported_extension(tmp_path, monkeypatch):
     monkeypatch.setattr(admin, "DOCS_PATH", str(tmp_path))
     resp = client.post(

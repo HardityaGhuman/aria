@@ -31,7 +31,7 @@ export default function Login() {
     "w-full rounded-lg border border-hairline bg-surface px-3 py-2.5 text-[15px] outline-none focus:border-ink";
 
   return (
-    <div className="relative flex h-full items-center justify-center bg-canvas">
+    <div className="relative isolate flex h-full items-center justify-center bg-canvas">
       <AnimatedBackground />
       <div className="relative w-[360px] rounded-card border border-hairline bg-surface p-8 shadow-card">
         <div className="mb-1 text-center text-[28px] font-bold tracking-tight">
