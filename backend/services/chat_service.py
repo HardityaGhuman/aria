@@ -181,16 +181,6 @@ def _preferences_note(owner_user_id: int | None) -> str | None:
     return block or None
 
 
-async def _history_with_preferences(
-    formatted_history: list[dict], owner_user_id: int | None
-) -> list[dict]:
-    """Append the user's preference note to the history fed to the answer model."""
-    note = await asyncio.to_thread(_preferences_note, owner_user_id)
-    if not note:
-        return formatted_history
-    return [*formatted_history, {"role": "system", "content": note}]
-
-
 async def _resolve_search_query(message: str, formatted_history: list[dict]) -> str:
     """Rewrite the message into a standalone search query (history-aware) so
     follow-ups retrieve correctly. Falls back to the original on any failure."""
@@ -210,6 +200,7 @@ async def _answer_policy_query(
     formatted_history: list[dict],
     allowed_tiers: list[str] | None,
     allowed_regions: list[str] | None = None,
+    preferences: str | None = None,
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
@@ -225,6 +216,7 @@ async def _answer_policy_query(
         user_message=message,
         context=retrieved.text,
         history=formatted_history,
+        preferences=preferences,
     )
 
     # A refusal or "not enough info" reply isn't grounded in the retrieved
@@ -280,18 +272,22 @@ async def generate_chat_reply(
         )
         result = ChatResult(reply, "", [], status="ok")
     elif classification == "meta":
-        # Preferences shape the answer, not the routing — inject only here.
-        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
+        # Preferences shape the answer, not the routing — fold into the system
+        # prompt (not history) so the length/tone/language directive carries weight.
+        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
         reply = await _run_blocking(
             get_meta_response,
             timeout_detail="The language model timed out while generating a response. Please try again.",
             user_message=message,
-            history=answer_history,
+            history=formatted_history,
+            preferences=pref_note,
         )
         result = ChatResult(reply, "", [], status="ok")
     else:
-        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
-        result = await _answer_policy_query(message, answer_history, allowed_tiers, allowed_regions)
+        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+        result = await _answer_policy_query(
+            message, formatted_history, allowed_tiers, allowed_regions, preferences=pref_note
+        )
 
     try:
         # Mirror the streaming path: persist citations only for a grounded answer,
@@ -411,10 +407,12 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
-        answer_history = await _history_with_preferences(formatted_history, owner_user_id)
+        # Preferences fold into the system prompt (see get_llm_response) rather
+        # than a trailing history turn, so the directive isn't under-weighted.
+        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
 
         if classification == "meta":
-            answer = await asyncio.to_thread(get_meta_response, message, answer_history)
+            answer = await asyncio.to_thread(get_meta_response, message, formatted_history, pref_note)
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}
@@ -440,7 +438,7 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
 
-        token_iter = stream_llm_response(message, retrieved.text, answer_history)
+        token_iter = stream_llm_response(message, retrieved.text, formatted_history, pref_note)
         full_answer = ""
         while True:
             delta = await asyncio.to_thread(_next_token, token_iter)

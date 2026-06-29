@@ -112,8 +112,12 @@ def login(request: Request, body: LoginRequest, response: Response):
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit(RATE_LIMIT_LOGIN)
 def refresh(request: Request, response: Response):
-    """Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair."""
+    """Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair.
+
+    Rate-limited (per IP — no Bearer header on this route) so it can't be used as
+    an unlimited token mint to refresh-then-spam past the chat limit."""
     _check_origin(request)
     raw = request.cookies.get(REFRESH_COOKIE)
     if not raw:
@@ -137,6 +141,7 @@ def refresh(request: Request, response: Response):
 
 
 @router.post("/logout", response_model=MessageResponse)
+@limiter.limit(RATE_LIMIT_LOGIN)
 def logout(request: Request, response: Response):
     """Revoke the current refresh token and clear the cookie."""
     raw = request.cookies.get(REFRESH_COOKIE)

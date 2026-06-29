@@ -17,12 +17,24 @@ def test_format_preferences_empty_for_defaults():
 
 
 def test_format_preferences_includes_custom_values():
+    # Now emits actionable directives (not key=value) so the model acts on them.
     block = prefs.format_preferences(
         {"tone": "friendly", "response_length": "short", "language": "French"}
-    )
-    assert "tone=friendly" in block
-    assert "length=short" in block
-    assert "language=French" in block
+    ).lower()
+    assert "friendly" in block       # tone directive
+    assert "brief" in block          # short-length directive
+    assert "french" in block         # language directive
+
+
+def test_normalize_language_collapses_english_variants():
+    # Regional English variants from the frontend must map back to the default,
+    # so a length-only change doesn't emit a redundant "Write in English (US)".
+    assert prefs._normalize_language("English (US)") == prefs.DEFAULTS["language"]
+    assert prefs._normalize_language("English (UK)") == prefs.DEFAULTS["language"]
+    assert prefs._normalize_language("english") == prefs.DEFAULTS["language"]
+    # Non-English passes through untouched.
+    assert prefs._normalize_language("Spanish") == "Spanish"
+    assert prefs._normalize_language(None) is None
 
 
 # --- DB round-trip (needs Postgres; skipped if unavailable) ---

@@ -71,6 +71,18 @@ def get_preferences(user_id: int) -> dict:
     return merged
 
 
+def _normalize_language(language: str | None) -> str | None:
+    """Collapse regional English variants to the canonical default.
+
+    The frontend offers "English (US)"/"English (UK)"; both are plain English to
+    the model. Storing them verbatim made ``format_preferences`` emit a redundant
+    "Write the answer in English (US)." directive for users who only ever changed
+    length. Mapping them back to the default ("English") keeps the prompt clean."""
+    if language and language.strip().lower().startswith("english"):
+        return DEFAULTS["language"]
+    return language
+
+
 def set_preferences(
     user_id: int,
     tone: str | None = None,
@@ -78,6 +90,7 @@ def set_preferences(
     language: str | None = None,
 ) -> dict:
     """Upsert the user's preferences; returns the merged-over-defaults result."""
+    language = _normalize_language(language)
     with _connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -95,15 +108,44 @@ def set_preferences(
     return get_preferences(user_id)
 
 
+# Map each stored value to an explicit, actionable instruction. A bare
+# "length=short" is a weak signal the model tends to ignore; a directive
+# ("Keep it brief: …") actually changes the output.
+_LENGTH_DIRECTIVES = {
+    "short": "Keep the answer brief — a one-sentence lead and at most 2-3 short bullets. Include only the most important points; omit minor detail.",
+    "medium": "Use a balanced length — a lead sentence plus a few focused bullets.",
+    "long": "Be thorough — cover the relevant specifics, conditions, and exceptions across the bullets.",
+}
+_TONE_DIRECTIVES = {
+    "neutral": "Keep a neutral, professional tone.",
+    "warm": "Use a warm, friendly tone.",
+    "friendly": "Use a warm, friendly tone.",
+    "formal": "Use a formal, businesslike tone.",
+    "casual": "Use a relaxed, casual tone.",
+}
+
+
 def format_preferences(prefs: dict) -> str:
-    """Render a one-line prompt block, or "" when the prefs are all defaults.
+    """Render a directive prompt block, or "" when the prefs are all defaults.
 
     Returning "" for the default case keeps the prompt clean for users who never
-    customized anything — no point spending tokens telling the model to be neutral."""
+    customized anything — no point spending tokens telling the model to be neutral.
+    Each non-default value becomes a concrete instruction (not just a key=value)
+    so the model actually acts on it."""
     if all(prefs.get(key) == DEFAULTS[key] for key in DEFAULTS):
         return ""
-    return (
-        "User preferences (honor these in your answer): "
-        f"tone={prefs.get('tone')}, length={prefs.get('response_length')}, "
-        f"language={prefs.get('language')}."
-    )
+
+    parts = []
+    length = prefs.get("response_length")
+    if length in _LENGTH_DIRECTIVES:
+        parts.append(_LENGTH_DIRECTIVES[length])
+    tone = prefs.get("tone")
+    if tone in _TONE_DIRECTIVES:
+        parts.append(_TONE_DIRECTIVES[tone])
+    language = prefs.get("language")
+    if language and language != DEFAULTS["language"]:
+        parts.append(f"Write the answer in {language}.")
+
+    if not parts:
+        return ""
+    return "User preferences (honor these — they override the default answer length/tone):\n- " + "\n- ".join(parts)

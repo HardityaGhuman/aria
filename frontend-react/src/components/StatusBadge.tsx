@@ -1,9 +1,12 @@
+// Color-coded by lifecycle (bg tint + text + ring outline), legible in both
+// themes via semi-transparent fills over the Tailwind palette. Indexed reads as
+// a calm "cucumber" green; never a flat gray.
 const STYLE: Record<string, string> = {
-  indexed: "bg-badge-all text-text-secondary",
-  processing: "bg-badge-manager/15 text-badge-manager",
-  queued: "bg-canvas text-text-tertiary",
-  failed: "bg-badge-hr/15 text-badge-hr",
-  unknown: "bg-canvas text-text-tertiary",
+  indexed: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/40 dark:text-emerald-300",
+  processing: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/40 dark:text-amber-300",
+  queued: "bg-sky-500/15 text-sky-700 ring-1 ring-sky-500/40 dark:text-sky-300",
+  failed: "bg-rose-500/15 text-rose-700 ring-1 ring-rose-500/40 dark:text-rose-300",
+  unknown: "bg-zinc-400/15 text-zinc-600 ring-1 ring-zinc-400/40 dark:text-zinc-300",
 };
 
 export function StatusBadge({ status }: { status: string }) {

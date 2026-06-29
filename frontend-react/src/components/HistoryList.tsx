@@ -6,9 +6,13 @@ import type { SessionInfo } from "../lib/api/schemas";
 export function HistoryList({
   onOpen,
   activeId,
+  onActiveDeleted,
 }: {
   onOpen: (id: string) => void;
   activeId?: string | null;
+  // Called when the currently-open session is deleted, so the view can redirect
+  // to a fresh chat instead of rendering a session that no longer exists.
+  onActiveDeleted?: () => void;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
@@ -23,7 +27,11 @@ export function HistoryList({
 
   const del = useMutation({
     mutationFn: (id: string) => apiFetch(`/chat/sessions/${id}`, { method: "DELETE", auth: true }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+      // Deleting the open chat must not leave its (now-gone) messages on screen.
+      if (id === activeId) onActiveDeleted?.();
+    },
   });
 
   const rename = useMutation({

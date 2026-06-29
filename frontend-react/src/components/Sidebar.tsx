@@ -57,7 +57,11 @@ export function Sidebar() {
         <div className="px-3 pb-1 text-[12px] uppercase tracking-wide text-text-tertiary">
           Chats
         </div>
-        <HistoryList activeId={activeSession} onOpen={(id) => navigate(`/?s=${id}`)} />
+        <HistoryList
+          activeId={activeSession}
+          onOpen={(id) => navigate(`/?s=${id}`)}
+          onActiveDeleted={() => navigate("/")}
+        />
       </div>
 
       {/* Persistent account bar. */}

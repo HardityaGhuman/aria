@@ -7,7 +7,7 @@ import { SuggestionChips } from "../components/SuggestionChips";
 import { Markdown } from "../components/Markdown";
 import { AssistantAvatar } from "../components/AssistantAvatar";
 import { ResponseSources } from "../components/ResponseSources";
-import { AnimatedBackground } from "../components/AnimatedBackground";
+import { Typewriter } from "../components/Typewriter";
 import { streamChat } from "../lib/api/sse";
 import { ensureSession } from "../lib/api/sessions";
 import { apiFetch } from "../lib/api/client";
@@ -125,10 +125,9 @@ export default function Chat() {
       <div className="flex h-full flex-col">
         {empty ? (
           <div className="relative flex flex-1 flex-col items-center justify-center gap-6">
-            <AnimatedBackground />
             <div className="text-2xl">✦</div>
             <h1 className="text-[24px] font-semibold tracking-tight">
-              Good morning. How can I help you today?
+              <Typewriter text={`${greeting()}. How can I help you today?`} speed={45} />
             </h1>
             <div className="w-full max-w-[640px]">
               <SuggestionChips onPick={handleSend} />
@@ -156,6 +155,14 @@ export default function Chat() {
       </div>
     </AppShell>
   );
+}
+
+// Time-of-day greeting for the new-chat screen, from the user's local clock.
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
 }
 
 function Bubble({

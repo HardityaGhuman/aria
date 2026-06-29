@@ -3,13 +3,28 @@
     "schemas": {
       "Body_upload_document_admin_documents_upload_post": {
         "properties": {
+          "access_tier": {
+            "default": "all",
+            "title": "Access Tier",
+            "type": "string"
+          },
           "department": {
             "title": "Department",
+            "type": "string"
+          },
+          "doc_status": {
+            "default": "active",
+            "title": "Doc Status",
             "type": "string"
           },
           "file": {
             "contentMediaType": "application/octet-stream",
             "title": "File",
+            "type": "string"
+          },
+          "region": {
+            "default": "global",
+            "title": "Region",
             "type": "string"
           }
         },
@@ -651,7 +666,7 @@
   "paths": {
     "/admin/documents": {
       "get": {
-        "description": "List every corpus document, merging on-disk facts with ingestion status.",
+        "description": "List every corpus document, merging on-disk facts with ingestion status.\n\nStatus precedence: a ``document_status`` row (live lifecycle: queued/\nprocessing/failed from the admin upload path) wins. Docs with no row are the\noffline-indexed seed corpus, which the tracking table never sees \u2014 for those we\nask Chroma directly: chunks present => ``indexed``, else ``unknown``. Without\nthis, the whole seed corpus showed ``unknown`` despite being fully searchable.",
         "operationId": "list_documents_admin_documents_get",
         "responses": {
           "200": {
@@ -682,7 +697,7 @@
     },
     "/admin/documents/upload": {
       "post": {
-        "description": "Accept a document, store it under ``docs/<department>/``, queue ingestion.",
+        "description": "Accept a document, store it under ``docs/<department>/``, queue ingestion.\n\n``access_tier``/``region``/``doc_status`` are stamped into a ``.meta.yaml``\nsidecar so the uploader can tier any format (csv/xlsx/pdf carry no inline\nfrontmatter); for md/txt an inline frontmatter block still takes precedence.",
         "operationId": "upload_document_admin_documents_upload_post",
         "requestBody": {
           "content": {
@@ -941,7 +956,7 @@
     },
     "/auth/refresh": {
       "post": {
-        "description": "Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair.",
+        "description": "Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair.\n\nRate-limited (per IP \u2014 no Bearer header on this route) so it can't be used as\nan unlimited token mint to refresh-then-spam past the chat limit.",
         "operationId": "refresh_auth_refresh_post",
         "responses": {
           "200": {
@@ -1010,7 +1025,7 @@
     },
     "/chat/history/{session_id}": {
       "delete": {
-        "description": "Clear conversation history for a session.",
+        "description": "Clear conversation history for one of the caller's own sessions.",
         "operationId": "clear_history_chat_history__session_id__delete",
         "parameters": [
           {
@@ -1056,7 +1071,7 @@
         ]
       },
       "get": {
-        "description": "Retrieve conversation history for a session.",
+        "description": "Retrieve conversation history for one of the caller's own sessions.",
         "operationId": "get_history_chat_history__session_id__get",
         "parameters": [
           {

@@ -15,6 +15,11 @@ const DEPARTMENTS = [
   "people-career",
 ];
 const STATUSES = ["all", "queued", "processing", "indexed", "failed"];
+// Metadata an HR uploader stamps on the next upload (written into a .meta.yaml
+// sidecar server-side). Must mirror the backend allow-lists in routes/admin.py.
+const ACCESS_TIERS = ["all", "manager", "hr_only"];
+const REGIONS = ["global", "us", "india"];
+const DOC_STATUSES = ["active", "superseded"];
 
 export default function AdminDocuments() {
   const qc = useQueryClient();
@@ -23,6 +28,10 @@ export default function AdminDocuments() {
   // Doubles as the table's department filter ("all" = no filter) and the upload
   // target. Upload is blocked while "all" is selected (no concrete department).
   const [dept, setDept] = useState("all");
+  // Metadata applied to the next upload (sidecar written server-side).
+  const [tier, setTier] = useState("all");
+  const [region, setRegion] = useState("global");
+  const [docStatus, setDocStatus] = useState("active");
   const fileRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // document_id pending delete confirmation (inline, mirrors the sidebar chat list).
@@ -39,7 +48,8 @@ export default function AdminDocuments() {
   });
 
   const upload = useMutation({
-    mutationFn: ({ file }: { file: File }) => uploadDocument(file, dept),
+    mutationFn: ({ file }: { file: File }) =>
+      uploadDocument(file, dept, { access_tier: tier, region, doc_status: docStatus }),
     onSuccess: (r) => {
       setNotice(`Queued ${r.document_id}`);
       qc.invalidateQueries({ queryKey: ["documents"] });
@@ -135,6 +145,49 @@ export default function AdminDocuments() {
           </select>
         </div>
 
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+          <span className="text-text-tertiary">New upload metadata:</span>
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Access tier stamped on the next upload"
+          >
+            {ACCESS_TIERS.map((t) => (
+              <option key={t} value={t}>
+                tier: {t}
+              </option>
+            ))}
+          </select>
+          <select
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Region stamped on the next upload"
+          >
+            {REGIONS.map((r) => (
+              <option key={r} value={r}>
+                region: {r}
+              </option>
+            ))}
+          </select>
+          <select
+            value={docStatus}
+            onChange={(e) => setDocStatus(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Status stamped on the next upload (superseded docs are excluded from retrieval)"
+          >
+            {DOC_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                status: {s}
+              </option>
+            ))}
+          </select>
+          <span className="text-text-tertiary">
+            (md/txt with inline frontmatter override these)
+          </span>
+        </div>
+
         {notice && (
           <div className="mb-3 rounded-lg bg-canvas px-3 py-2 text-[13px] text-text-secondary">
             {notice}
@@ -149,7 +202,7 @@ export default function AdminDocuments() {
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Department</th>
                 <th className="px-4 py-3 font-medium">Updated</th>
-                <th className="px-4 py-3"></th>
+                <th className="w-[120px] px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -163,9 +216,9 @@ export default function AdminDocuments() {
                   <td className="px-4 py-3 text-text-tertiary">
                     {d.updated_at ? new Date(d.updated_at).toLocaleDateString() : "—"}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="w-[120px] px-4 py-3 text-right">
                     {confirming === d.document_id ? (
-                      <span className="inline-flex items-center gap-1.5 text-[12px]">
+                      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px]">
                         <span className="text-text-tertiary">Delete?</span>
                         <button
                           className="font-medium text-badge-hr hover:underline"

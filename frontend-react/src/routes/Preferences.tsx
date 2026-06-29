@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "../components/AppShell";
 import { Segmented } from "../components/Segmented";
 import { Toggle } from "../components/Toggle";
@@ -10,6 +10,7 @@ import { lengthToTone, toneToLength, type Tone } from "../lib/prefMapping";
 const LANGUAGES = ["English (US)", "English (UK)", "Spanish", "French", "German", "Hindi"];
 
 export default function Preferences() {
+  const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["preferences"], queryFn: getPreferences });
   const [tone, setTone] = useState<Tone>("Balanced");
   const [language, setLanguage] = useState("English (US)");
@@ -25,6 +26,9 @@ export default function Preferences() {
     mutationFn: () =>
       updatePreferences({ response_length: toneToLength(tone), language, tone: data?.tone ?? null }),
     onSuccess: () => {
+      // Refresh the cached prefs so the page reflects what was just saved
+      // (and any other view reading them updates too).
+      qc.invalidateQueries({ queryKey: ["preferences"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     },
@@ -42,7 +46,7 @@ export default function Preferences() {
         <div className={`${card} mb-5`}>
           <div className="mb-3 text-[15px] font-semibold">Output Style</div>
           <div className="mb-4">
-            <div className="mb-2 text-[13px] text-text-secondary">Answer Tone</div>
+            <div className="mb-2 text-[13px] text-text-secondary">Response Length</div>
             <Segmented
               options={["Concise", "Balanced", "Detailed"]}
               value={tone}

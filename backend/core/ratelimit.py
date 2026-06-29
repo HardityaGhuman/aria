@@ -5,9 +5,15 @@ Per-user / per-IP rate limiting at the API edge (slowapi). Protects the backend
 and the LLM token budget from a single client hammering the chat or login
 endpoints.
 
-Key strategy: authenticated callers are limited per Bearer token (so one user's
-spike doesn't throttle everyone behind a shared NAT); anonymous callers fall back
-to client IP. A breach renders the uniform error envelope with ``Retry-After``.
+Key strategy: authenticated callers are limited per **user id** (the token's
+``sub`` claim), so one user's spike doesn't throttle everyone behind a shared
+NAT; anonymous callers fall back to client IP. A breach renders the uniform
+error envelope with ``Retry-After``.
+
+Why ``sub`` and not the raw token: every ``/auth/refresh`` mints a fresh access
+token (new ``jti``), so keying on the token string handed a caller a brand-new
+bucket per rotation — refresh-then-spam bypassed the chat limit entirely. The
+``sub`` is stable across rotations, so the bucket follows the user.
 """
 # pyrefly: ignore [missing-import]
 from fastapi import Request
@@ -20,11 +26,19 @@ from slowapi.errors import RateLimitExceeded
 # pyrefly: ignore [missing-import]
 from slowapi.util import get_remote_address
 
+from backend.core.auth import AuthError, decode_token
+
 
 def _rate_key(request: Request) -> str:
     auth = request.headers.get("authorization")
-    if auth:
-        return auth  # per-token, not per-IP, so shared egress IPs aren't punished
+    if auth and auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        try:
+            sub = decode_token(token).get("sub")
+        except AuthError:
+            sub = None  # garbage/expired token → fall through to IP keying
+        if sub:
+            return f"user:{sub}"
     return get_remote_address(request)
 
 
