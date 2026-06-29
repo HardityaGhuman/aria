@@ -71,6 +71,32 @@ prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
 (`/chat/stream`), user-owned sessions (`SessionStore` seam, Redis-ready), a uniform
 error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
+### ▶ Next session — resume here (eval rebuild, step 4)
+
+The offline eval harness is **stale** (targets the retired single-doc
+`Employee-Handbook.pdf`; all 35 questions + ground truths are dead). Design +
+implementation plan are written and approved (local-only, gitignored):
+
+- Spec: `docs/superpowers/specs/2026-06-29-eval-rebuild-design.md`
+- Plan: `docs/superpowers/plans/2026-06-29-eval-rebuild.md` (8 TDD tasks)
+
+**Decisions locked:** document-level scoring (match on chunk `metadata["source"]`,
+exact equality), hand-authored ~24-question dataset against the real 30-doc corpus,
+two layers kept (fast local retrieval metrics + RAGAS in the isolated venv), raw
+ranking over the full corpus (no RBAC filter — isolates ranking quality). New
+headline metric `doc_precision@k` for the planned document viewer. A **fairness
+bar** (non-trivial questions: vocab-gap with zero keyword overlap, cross-doc,
+tabular, distractor-prone) is baked into the spec.
+
+**To execute next time:** invoke `superpowers:executing-plans` on the plan,
+inline (no subagents). Tasks 1–2, 4–7 are mechanical TDD; Task 3 = author the
+dataset (I draft from the corpus, you review); Task 8 = run the baseline (needs
+`python -m backend.index_documents` first). Out of scope until *after* the
+baseline: reranker, chunking, retrieval tuning — measure first.
+
+**Then (later sessions):** logging/tracing observability (step 5), then hosting
+(step 8 — confirmed *not* a blocker to agentic features, which are localhost-buildable).
+
 A **security-hardening pass** then closed step 2's deferred items and an audit's
 findings (see *Security hardening* below). **All 98 backend tests pass.** Next
 planned focus: **step 8 — pgvector + Cloud Run**.
@@ -123,7 +149,7 @@ Layered prompt-injection defense + an authorization audit:
 | 1 | Auth + RBAC + region | ✅ | bcrypt + JWT, `get_current_user`/`require_role`, `/auth/login`, `/auth/me` (id+role+region), HR-gated `/admin/reindex`. **3-tier RBAC** (`tiers_for_role`: employee→all, manager→all+manager, HR→all+manager+hr_only) enforced as a single app-layer **retriever partition** (security invariant unit-tested). **Region filter** (global + home region) + **superseded** exclusion as Chroma filters. Graceful **confidential message** when only restricted docs match. Specs: `2026-06-24`, `2026-06-25`. |
 | 2 | Security & resilience | ✅ | SQL injection already safe (parameterized — invariant). **Done:** per-user/IP rate limiting (slowapi), LLM retry/backoff, context truncation, CORS lockdown + `/auth/refresh` CSRF (now exact-Origin). **Now also done (hardening pass):** layered prompt-injection defense (section-0 rules + per-request nonced context fence + integrity preamble on meta/chitchat/summary), **session object-auth/IDOR fix** (`test_idor.py`), upload caps (`MAX_UPLOAD_BYTES`, overwrite-409, `RATE_LIMIT_ADMIN`), **rate-limit key fix** (per-`sub` not per-token; `/auth/refresh`+`/auth/logout` limited — closes the refresh-then-spam bypass; `test_ratelimit.py`). **Deferred (step 8):** shared-store limiter for multi-instance, short-TTL/deny-list for instant revocation; RPM/RPD budgeting. |
 | 3 | User preferences | ✅ | `user_preferences` table; `GET/PUT /me/preferences`; tone/length/language **folded into the system prompt** (not a trailing history turn — that was under-weighted, so language/length appeared ignored), best-effort (a prefs DB hiccup never breaks a chat). Regional English variants normalized to the default so a length-only change emits no redundant language directive. |
-| 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Pending:** run offline eval harness (recall@k/MRR/context-recall + RAGAS), cross-encoder reranker, vocabulary-gap recall, router contextual-compression — all eval-gated. |
+| 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Eval rebuild designed + planned** (specs/plans `2026-06-29-eval-rebuild*`): old harness is stale (single-doc handbook); rebuild is document-level, hand-authored ~24-Q dataset, `doc_precision@k` headline, RAGAS isolated — **execution pending next session**. **Pending after baseline:** cross-encoder reranker, vocabulary-gap recall, router contextual-compression — all eval-gated. |
 | 5 | Observability | 🔄 | **Done:** standardized response envelope (`answer`/`sources[document_id,file,section,source_type]`/`latency_ms`/`session_id`/`status`) + uniform error body. **Pending:** per-query telemetry log; monitoring metrics (P95/P99, no-answer rate, LLM-failure rate, cost/query). |
 | 6 | Admin document lifecycle | ✅ | `POST /admin/documents/upload` (multipart, background ingest), `GET /admin/documents` (+status), `GET …/{id}/status`, `DELETE …/{id}` (file + chunks), `POST /admin/reindex`. Per-doc `queued→processing→indexed→failed` in `document_status`. Upload accepts `access_tier`/`region`/`status` form fields written to a `.meta.yaml` sidecar, so HR can tier any format (csv/xlsx/pdf carry no inline frontmatter) from the portal; md/txt inline frontmatter still wins. **Deferred:** object storage (S3); ingestion stays synchronous-in-background for now. |
 | 7 | React frontend | 🔄 built | React + Vite + TanStack Query app (`frontend-react/`) consuming auth (login/refresh), chat with **SSE streaming**, session list (rename/inline-delete), preferences, and the HR document portal (upload/list/status/delete/reindex). Dark mode, per-response sources, department filter. Remaining polish tracked ad hoc. |
