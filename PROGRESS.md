@@ -74,23 +74,16 @@ error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
 ### ▶ NEXT SESSION — resume here (step 10 agentic layer — DESIGNED, not built)
 
-**Since last sync (2026-06-30, later session — two pre-agentic fixes shipped):**
-1. **Retrieval recall fix (step 4):** H2-only markdown split (`CHUNK_VERSION …-h2-only-split-v11`) — `###` subsections no longer split off from their parent `##`. Fixed a real leak where a manager asking for the "interview loop stages" got "Stage 2/3 not detailed" because the four `### Stage N` chunks fragmented and TOP_K cut two. Reindexed + verified. ✅ **Gate PASSED:** `benchmark compare` post-split = hybrid recall **0.96→0.99**, precision **0.45 flat**, mrr **0.92→0.94** (`hard` mrr now 1.00) — strictly better, no precision cliff. Step 4 structural work validated; reranker / cross_doc-lift still pending.
-2. **Log-noise cleanup (step 5):** `core/logging.py` now quiets LiteLLM INFO double-prints + "Provider List" banner + uvicorn OPTIONS preflight lines. Telemetry JSON untouched.
-   Both verified; **full suite 131 tests green**.
-3. **Conversational-quality + i18n batch (2026-07-01, TDD, 151 tests green).** Five fixes from a manager/HR convo analysis + one edge:
-   - **Language honored on the policy route.** Was: preference directive sat only in the system prompt and got out-competed by the large English context block in the user turn, so policy answers stayed English while meta/chitchat honored the language (the "Hindi worked, Spanish didn't" report — really meta-vs-policy). Now: the directive is restated at the END of the augmented user turn, closest to generation (`llm._augmented_message`).
-   - **Localized refusal/clarify/no-results** (es/fr/de/hi maps in `chat_service`) on the no-LLM instant paths.
-   - **Filler → clarify** (`_is_low_content_message`): "umm"/"idk" short-circuit before classify/rewrite (was: rewriter fabricated a query → garbage retrieval).
-   - **No copy-paste re-answer** (`_is_rephrase_request`): "explain it better"/"one by one" → re-explain directive + temp 0.4 (was: temp 0 + same query = byte-identical reply).
-   - **No "the employee" framing leak**: direct-address rule in `docs/system_prompt.txt`.
-   - **Edge — language-agnostic ungrounded detection**: the model emits a fixed never-translated sentinel `__NO_CONTEXT_ANSWER__` when context can't answer; the service detects THAT (not English prose) and returns localized no-results. Streaming gates the leading tokens so the raw sentinel never flashes to the user.
-   - Partially addresses the deferred [[router-contextual-compression]] over-refusal item (filler + rephrase cases) — the 8B classifier still lacks full convo context for the general case.
-4. **User flagged a frame of reference for the agentic build is coming** — they'll provide it; start step 10 against it.
+**▶ AGENTIC IS UNBLOCKED — start step 10 against the user's incoming frame of reference.** Verified there is no hard prerequisite on current code: JWT carries role+region (Principal is a server-built object from existing claims); `_invoke(**kwargs)` forwards straight to `litellm.completion` so `tools=[...]` native function-calling drops in with zero plumbing change; `generate_chat_reply`/`stream_chat_reply` are the orchestration seam the bounded loop slots into; SSE events are additive dicts (tool_call/tool_result/step emit-only). `core/tools/`, `Principal`, `AGENT_TOOLS_ENABLED`, `MAX_TOOL_STEPS` are net-new — that IS step 10, not pre-work. Hosting (step 8) is NOT a blocker (localhost-buildable).
 
-**Step 5 observability tracing/logging is DONE** (shipped 2026-06-30: `core/trace.py`
-+ `_invoke` funnel + `request_trace` rollup, 131 backend tests green, smoke-verified).
-Only metrics aggregation remains pending under step 5.
+**Work landed since the build order was last fully synced (all committed, tree clean):**
+1. **Retrieval H2-only split (step 4)** — `CHUNK_VERSION …-h2-only-split-v11`, reindexed (304 chunks). Gate PASSED: `benchmark compare` hybrid recall **0.96→0.99**, precision flat 0.45, mrr **0.92→0.94**, no precision cliff. Reranker/cross_doc-lift still pending (eval-gated).
+2. **Log-noise cleanup (step 5)** — `core/logging.py: _quiet_noisy_libraries()` quiets LiteLLM INFO/banner + uvicorn OPTIONS; telemetry JSON untouched.
+3. **Conversational-quality + i18n batch (TDD)** — language reinforced at END of the augmented user turn so the **policy** route honors it (was meta-vs-policy, not Hindi-vs-Spanish — see [[prompt-directive-placement]]); localized refusal/clarify/no-results (es/fr/de/hi); filler→clarify (`_is_low_content_message`); rephrase→re-explain directive+temp 0.4 (`_is_rephrase_request`); direct-address system-prompt rule (no "the employee" leak); **language-agnostic ungrounded detection** via the never-translated `__NO_CONTEXT_ANSWER__` sentinel (stream-gated so it never reaches the client). Partially covers the deferred [[router-contextual-compression]] item.
+4. **DB connection pooling (step 7.5) ✅** — one process-wide `psycopg_pool` (`core/db.py`); `_connect()` → `db.pooled(error_factory)`; call sites unchanged; closed on shutdown/test-teardown. Fixed a real connection-leak bug. **153 tests green.**
+5. **Embedding-dim decision LOCKED** ([[embedding-dim-decision]]) — keep MiniLM 384 for the step-8 pgvector cut; do not flip to a 1536 API model same cut. Vector-store abstraction seam deliberately deferred to step-8 start (build against pgvector's real signature, not speculatively).
+
+**Step 5 observability tracing/logging is DONE.** Only metrics aggregation remains pending under step 5 — a fast-follow, NOT a gate for agentic (raw per-call spans already log cost/latency/tokens to watch the loop's call multiplication).
 
 **Agentic layer is fully designed; zero code written.** Brainstorm + two specs +
 the model-allocation/LangGraph decision done. A fresh session starts building
@@ -100,8 +93,9 @@ inline (`writing-plans` → `executing-plans`, no subagents, /caveman full).
 - Pre-setup + model-allocation spec: `docs/superpowers/specs/2026-06-30-agentic-presetup-model-allocation-design.md` (gitignored) — resolves which model picks tools + LangGraph + provisioning checklist.
 - **Decisions locked:** new `action` intent → no-RAG lane; **70B selects tools on every lane in v1** (hybrid already wakes 70B); validity from **native function-calling + strict JSON schemas + validate-or-repair** (unvalidated call never executes), not model size; Tier-1 reads move to 8B (`AGENT_READ_MODEL`) only after measured tool-pick accuracy; **NO LangGraph** (hand-rolled bounded loop, no `langchain-core` re-coupling); gated behind `AGENT_TOOLS_ENABLED`.
 - **Build sequence:** (1) loop scaffold + `core/tools/registry.py` + `Principal` + ALL security invariants (stub tool, 70B) → (2) Tier-1 reads (leave-balance + holidays) THEN measure 8B → (3) Slack front-door → (4) Tier-2 writes (book-leave, confirmation-gated, always 70B) → (5) Tier-3 Drive auto-ingest. Each its own spec→plan→execute.
-- **Next action:** invoke `superpowers:writing-plans` on **sub-step 1** (loop scaffold + registry + Principal + security invariants). Pre-setup (GCP service account, mock-HRIS sheet, Slack app) needed before Tier-1, NOT before the scaffold.
-- **Test cmd:** `JWT_SECRET=dummy venv/bin/python -m pytest …` (the `eval_venv` has no pytest — use `venv`).
+- **Next action:** the user is providing a frame of reference for the agentic build — start step 10 against it, then invoke `superpowers:writing-plans` on **sub-step 1** (loop scaffold + `core/tools/registry.py` + `Principal` + security invariants, stub tool, 70B). Pre-setup (GCP service account, mock-HRIS sheet, Slack app) is needed before Tier-1, NOT before the scaffold.
+- **Test cmd:** `JWT_SECRET=dummy venv/bin/python -m pytest backend/tests/ -q` (the `eval_venv` has no pytest — use `venv`). Current baseline: **153 tests green**.
+- ⚠️ **Do NOT treat `docs/superpowers/plans/2026-07-01-pre-agentic-foundation.md` as source of truth** — it's stale (wrong symbols: `run_indexing`/`get_embedding`/`vector_store.query` don't exist; `CHUNK_VERSION` is in `chunking.py` not `indexing.py`; "_invoke for all LLM calls" is false for streaming) and has Phase-4 contradictions (the 384-vs-1536 embedding-dim trap, and it re-buries tier filtering in SQL vs the app-layer `retriever.partition_by_tier` invariant). Reason from the code + this file + CLAUDE.md instead. The embedding-dim trap is resolved in [[embedding-dim-decision]].
 
 **Then:** step 5 metrics aggregation (P95/P99, rates, cost/query) reads the telemetry stream; hosting (step 8) is confirmed NOT a blocker to agentic (localhost-buildable).
 
