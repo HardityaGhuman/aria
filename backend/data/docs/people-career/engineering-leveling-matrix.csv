@@ -1,0 +1,8 @@
+level,scope,autonomy,impact
+L1,Task-level work within a team,Works under close guidance on well-defined tasks,Contributes to team delivery; learning fundamentals
+L2,Feature-level work within a team,Works independently on scoped features with light review,Delivers reliable features; growing technical depth
+L3,Component or service ownership,Owns a component end-to-end; drives design within scope,Improves reliability or velocity of the team
+L4,Cross-team technical leadership,Sets technical direction for a domain; mentors L1-L3,Measurable impact on product quality or engineering efficiency
+L5,Org-wide technical strategy,Defines architecture across multiple teams; drives standards,Shapes the technical roadmap; unblocks entire teams
+L6,Company-wide technical influence,Resolves the hardest technical problems; sets multi-year direction,Defines competitive technical advantage for the company
+L7,Industry-level thought leadership,Recognized externally; defines industry standards and practices,Elevates company reputation; creates long-term strategic leverage

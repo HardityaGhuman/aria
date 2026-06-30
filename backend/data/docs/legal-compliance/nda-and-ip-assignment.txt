@@ -1,0 +1,81 @@
+---
+department: legal-compliance
+access_tier: all
+doc_type: policy
+region: global
+version: 2026.1
+effective_date: 2026-01-01
+title: Non-Disclosure Agreement and IP Assignment Policy
+---
+
+Non-Disclosure Agreement and IP Assignment Policy
+GSVH Corp — Effective 1 January 2026
+
+1. PURPOSE AND SCOPE
+
+This policy establishes the confidentiality and intellectual property obligations that apply to all employees, contractors, interns, and other individuals engaged by GSVH Corp (hereafter "the Company"). It applies from the first day of engagement and survives the end of employment or the contractual relationship as set out in Section 3 below.
+
+The Company invests substantially in developing proprietary processes, client relationships, software, research, and strategic plans. Protecting this information is essential to the Company's competitive position and to the trust placed in it by clients, partners, and employees. Every person covered by this policy is a steward of that information.
+
+2. DEFINITION OF CONFIDENTIAL INFORMATION
+
+"Confidential Information" means any information that is not generally known to the public and that the Company treats as proprietary, whether or not it is marked as such. This includes, without limitation:
+
+(a) Business strategies, plans, financial projections, and pricing models;
+(b) Client and prospect identities, contact details, contract terms, and usage data;
+(c) Source code, algorithms, system architectures, and technical specifications;
+(d) Personnel data, compensation structures, and performance information;
+(e) Research findings, product roadmaps, and pre-launch feature details;
+(f) Vendor agreements, supplier terms, and partnership arrangements;
+(g) Any information received from third parties that the Company has agreed to treat as confidential.
+
+Information ceases to be Confidential Information if it enters the public domain through no fault of the recipient, or if the recipient can demonstrate it was independently known before receiving it from the Company.
+
+3. CONFIDENTIALITY OBLIGATIONS AND DURATION
+
+During the period of engagement, covered individuals must:
+
+(a) Use Confidential Information solely for the purpose of performing their duties at GSVH Corp;
+(b) Not disclose Confidential Information to any third party without prior written authorisation from the General Counsel or an authorised delegate;
+(c) Apply at least the same degree of care to protecting Confidential Information as they apply to their own most sensitive personal information, and in no event less than reasonable care;
+(d) Promptly notify the Legal & Compliance team if they become aware of any actual or suspected unauthorised disclosure.
+
+Post-termination obligations: The duty of confidentiality in respect of trade secrets and proprietary business information continues for a period of three (3) years following the end of employment or engagement. Obligations relating to personal data and client data governed by applicable data-protection law are not subject to any fixed sunset and survive indefinitely.
+
+4. INTELLECTUAL PROPERTY ASSIGNMENT
+
+4.1 Work Product Defined
+"Work Product" means all works of authorship, inventions, developments, discoveries, improvements, designs, processes, software, databases, and other creative or technical output that a covered individual conceives, creates, or contributes to — alone or with others — in the course of their employment or engagement with the Company, whether or not created during working hours and whether or not using Company equipment.
+
+4.2 Assignment
+The covered individual hereby assigns to GSVH Corp, its successors, and assigns, all right, title, and interest in and to Work Product, including all intellectual property rights (copyright, patent, trade secret, database rights, and any other rights now known or later recognised). This assignment takes effect automatically upon creation of the Work Product and does not require further documentation, although the covered individual agrees to execute such assignments or instruments as the Company may reasonably request to perfect or record the Company's title.
+
+4.3 Moral Rights Waiver
+To the fullest extent permitted by applicable law, the covered individual waives all moral rights in Work Product in favour of the Company and its licensees.
+
+4.4 Pre-Existing IP
+Any intellectual property created before engagement with GSVH Corp ("Pre-Existing IP") is excluded from this assignment. Covered individuals must disclose any Pre-Existing IP they intend to use in the performance of their duties before using it; continued use without disclosure constitutes implied licence to the Company on a royalty-free basis.
+
+5. PERMITTED DISCLOSURES
+
+Nothing in this policy prohibits disclosures required by law, court order, or regulatory authority. Where legally permissible, the covered individual must give the Company prompt written notice before making any legally compelled disclosure so that the Company may seek a protective order or other appropriate relief.
+
+6. OBLIGATIONS ON DEPARTURE
+
+Upon termination of engagement, or upon the Company's written request at any time, covered individuals must promptly return all Company property — including documents, files, equipment, and access credentials — and permanently delete any copies of Confidential Information held on personal devices or accounts. Departure from the Company does not diminish the post-termination obligations set out in Section 3.
+
+7. REMEDIES AND ENFORCEMENT
+
+The Company reserves the right to seek injunctive relief, specific performance, and all other remedies available at law or in equity in the event of an actual or threatened breach of this policy. Breach of this policy may also result in disciplinary action up to and including termination.
+
+8. GOVERNING LAW
+
+This policy is governed by the laws of the jurisdiction in which the covered individual's principal place of employment is located, without regard to conflict-of-law principles. Any dispute arising under this policy shall be subject to the exclusive jurisdiction of the courts of that jurisdiction.
+
+9. QUESTIONS AND REPORTING
+
+Questions about this policy should be directed to legal@gsvhcorp.com. Suspected breaches should be reported to the same address or through the Company's confidential ethics hotline. All reports will be treated with appropriate confidentiality.
+
+---
+Policy owner: Legal & Compliance
+Review cycle: Annual or upon material change in applicable law

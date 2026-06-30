@@ -1,0 +1,8 @@
+level,title,track,region,base_salary_usd,bonus_target_pct,equity_band
+L1,Associate Engineer,engineering,US,110000,8,E1
+L2,Engineer,engineering,US,130000,10,E2
+L3,Engineer II,engineering,US,150000,10,E3
+L4,Senior Engineer,engineering,US,165000,12,E4
+L5,Staff Engineer,engineering,US,205000,15,E5
+L6,Principal Engineer,engineering,US,245000,18,E6
+L7,Distinguished Engineer,engineering,US,300000,20,E7

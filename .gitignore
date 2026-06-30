@@ -1,7 +1,79 @@
+# Environment and secrets
 .env
-backend/data/chroma_db/
-backend/data/docs/
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 venv/
+.venv/
+env/
+
+# Streamlit and local app state
+.streamlit/secrets.toml
+
+# Generated RAG data: vector store (rebuildable) + archived reference docs.
+# The curated policy corpus under backend/data/docs/ IS tracked on purpose.
+data/chroma_db/
+backend/data/chroma_db/
+backend/data/docs_archive/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.pdf
+# ...but corpus PDFs are source-of-truth for RAG and must be tracked.
+!backend/data/docs/**/*.pdf
+
+# Logs and runtime output
+*.log
+logs/
+
+# Evaluation run outputs (keep the harness, not every run)
+backend/eval/results/
+
+# OS and editor noise
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+CLAUDE.md
+docs/superpowers
+
+# Isolated RAGAS evaluation environment
+eval_venv/
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+
+# Node / React frontend (planned)
+node_modules/
+.next/
+*.local
+
+# Playwright MCP run artifacts (screenshots/traces)
+.playwright-mcp/
+
+# Stray, unreferenced login background images dropped at repo root (not wired
+# into the frontend; real frontend assets live under frontend-react/).
+/login-bg.png
+/login-bg2.png
+
+.superpowers
