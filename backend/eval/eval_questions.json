@@ -1,0 +1,389 @@
+[
+  {
+    "id": "pto-eight-years",
+    "question": "Someone has been with the company for eight years. How many paid vacation days do they accrue per year?",
+    "ground_truth": "28 days per year — the Year 7-and-beyond tenure band of the PTO accrual schedule.",
+    "expected_document_ids": ["time-and-leave/working-hours-and-pto.md", "time-and-leave/pto-accrual-table.csv"],
+    "department": "time-and-leave",
+    "difficulty": "moderate",
+    "query_type": "cross_doc"
+  },
+  {
+    "id": "pto-carryover-cap",
+    "question": "How many unused PTO days can be carried over into the next calendar year?",
+    "ground_truth": "Up to 5 unused PTO days may be carried over; days above that are forfeited unless local law requires otherwise.",
+    "expected_document_ids": ["time-and-leave/working-hours-and-pto.md"],
+    "department": "time-and-leave",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "sick-leave-days",
+    "question": "How many paid sick days does a full-time employee get per year?",
+    "ground_truth": "Full-time employees are entitled to up to 10 paid sick days per calendar year, separate from PTO.",
+    "expected_document_ids": ["time-and-leave/leave-policies.md"],
+    "department": "time-and-leave",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "bereavement-parent",
+    "question": "If an employee's mother dies, how many paid days away from work can they take to grieve and arrange the funeral?",
+    "ground_truth": "Up to 5 paid days for the death of an immediate family member (which includes a parent).",
+    "expected_document_ids": ["time-and-leave/leave-policies.md"],
+    "department": "time-and-leave",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "maternity-minimum",
+    "question": "What is the minimum maternity leave for a birthing parent?",
+    "ground_truth": "At least 16 weeks of maternity leave, with pay per the parental pay policy or statutory entitlement, whichever is greater.",
+    "expected_document_ids": ["time-and-leave/leave-policies.md"],
+    "department": "time-and-leave",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "probation-length",
+    "question": "How long is the probation period for new hires?",
+    "ground_truth": "90 calendar days from the start date; it may be extended once by up to 30 days where genuinely needed.",
+    "expected_document_ids": ["hr/employment-basics.md"],
+    "department": "hr",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "referral-data-scientist",
+    "question": "What referral bonus can an employee earn for a successful Data Scientist referral?",
+    "ground_truth": "$6,000 — the standard referral bonus is $3,000 but hard-to-fill roles like Data Scientist can earn $6,000.",
+    "expected_document_ids": ["hr/employment-basics.md"],
+    "department": "hr",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "progressive-discipline-steps",
+    "question": "When someone keeps falling short on conduct, what is the escalating sequence the company follows before letting them go?",
+    "ground_truth": "Four escalating steps: verbal warning, written warning, final written warning (optionally with suspension), then termination.",
+    "expected_document_ids": ["hr/termination-and-discipline.md"],
+    "department": "hr",
+    "difficulty": "hard",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "vendor-gift-limit",
+    "question": "What is the value above which presents received from a supplier must be turned down or declared?",
+    "ground_truth": "Gifts from vendors or clients worth more than $100 must be declined or reported.",
+    "expected_document_ids": ["hr/code-of-conduct.md"],
+    "department": "hr",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "equal-opportunity-protected",
+    "question": "Does the company permit treating people differently because of their religion or a disability?",
+    "ground_truth": "No. GSVH Corp is an equal opportunity employer and does not tolerate discrimination on protected characteristics including religion and disability.",
+    "expected_document_ids": ["hr/employment-basics.md"],
+    "department": "hr",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "travel-meal-cap",
+    "question": "What is the daily meal reimbursement limit during business travel?",
+    "ground_truth": "Meals are reimbursed up to $60 per day against receipts; alcohol is not reimbursable except at a pre-approved client event.",
+    "expected_document_ids": ["finance/expenses-and-reimbursement.md"],
+    "department": "finance",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "tuition-cap",
+    "question": "How much tuition reimbursement can an employee receive per year?",
+    "ground_truth": "Tuition reimbursement is capped at $3,000 per calendar year, with manager and department-head pre-approval and on successful completion.",
+    "expected_document_ids": ["finance/expenses-and-reimbursement.md"],
+    "department": "finance",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "overtime-rate",
+    "question": "What overtime rate do non-exempt employees get for hours over 40 in a week?",
+    "ground_truth": "1.5 times their regular hourly rate for the additional hours, when overtime is approved in advance.",
+    "expected_document_ids": ["finance/compensation-and-payroll.md"],
+    "department": "finance",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "staff-engineer-base",
+    "question": "What is the US base salary for a Staff Engineer (L5)?",
+    "ground_truth": "$205,000 base salary for a US L5 Staff Engineer.",
+    "expected_document_ids": ["finance/salary-bands.csv"],
+    "department": "finance",
+    "difficulty": "moderate",
+    "query_type": "tabular"
+  },
+  {
+    "id": "manager-approval-limit",
+    "question": "What single-transaction amount can a Manager-tier approver authorize, and who signs off above that?",
+    "ground_truth": "A Manager tier can approve a single transaction up to $10,000; amounts above that are approved by a director.",
+    "expected_document_ids": ["finance/expense-approval-matrix.csv"],
+    "department": "finance",
+    "difficulty": "hard",
+    "query_type": "tabular"
+  },
+  {
+    "id": "expense-splitting",
+    "question": "Can an employee break one large purchase into several smaller claims so it stays under the higher approval threshold?",
+    "ground_truth": "No. Splitting a single purchase into smaller claims to stay under an approval threshold is prohibited and treated as a conduct issue.",
+    "expected_document_ids": ["finance/expenses-and-reimbursement.md"],
+    "department": "finance",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "mfa-required",
+    "question": "Is multi-factor authentication required on company accounts?",
+    "ground_truth": "Yes. MFA is mandatory for all company accounts; approve prompts only for sign-ins you initiated and report any you did not trigger.",
+    "expected_document_ids": ["it/acceptable-use-and-security.md"],
+    "department": "it",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "byod-personal-wipe",
+    "question": "If an employee loses the personal phone they use for work, can the company erase their private photos and messages?",
+    "ground_truth": "No. The mobile-management profile separates work from personal data and lets IT wipe only the work container, not personal photos, messages, or apps.",
+    "expected_document_ids": ["it/equipment-and-devices.md"],
+    "department": "it",
+    "difficulty": "hard",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "laptop-refresh-years",
+    "question": "After how many years is a company MacBook Air laptop refreshed?",
+    "ground_truth": "4 years — the refresh cycle for company laptops in the equipment catalog.",
+    "expected_document_ids": ["it/equipment-catalog.csv"],
+    "department": "it",
+    "difficulty": "moderate",
+    "query_type": "tabular"
+  },
+  {
+    "id": "esop-cliff",
+    "question": "What is the vesting cliff on an equity grant?",
+    "ground_truth": "A 1-year cliff: no shares vest in the first 12 months, then 25% vests at the one-year anniversary, within a 4-year schedule.",
+    "expected_document_ids": ["benefits/equity-and-esop.md"],
+    "department": "benefits",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "home-office-stipend",
+    "question": "What is the most the company will reimburse an employee to set up their workspace at home?",
+    "ground_truth": "A one-time home-office stipend of up to $500, claimed through the expenses portal against receipts.",
+    "expected_document_ids": ["benefits/remote-work.md"],
+    "department": "benefits",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "eap-confidential",
+    "question": "If an employee uses the company's counseling and personal-support service, will their manager find out?",
+    "ground_truth": "No. The Employee Assistance Program is confidential — the company receives only aggregate, anonymized usage data and never learns who used it; no manager or HR approval is needed.",
+    "expected_document_ids": ["benefits/health-and-wellbeing.md"],
+    "department": "benefits",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "data-classification-levels",
+    "question": "What are the four data classification levels the company uses?",
+    "ground_truth": "Public, Internal, Confidential, and Restricted.",
+    "expected_document_ids": ["legal-compliance/data-protection-and-privacy.md"],
+    "department": "legal-compliance",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "nda-trade-secret-duration",
+    "question": "After someone leaves the company, how long do their confidentiality obligations for trade secrets last?",
+    "ground_truth": "Three years following the end of employment for trade secrets and proprietary business information; obligations for personal and client data survive indefinitely.",
+    "expected_document_ids": ["legal-compliance/nda-and-ip-assignment.txt"],
+    "department": "legal-compliance",
+    "difficulty": "hard",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "career-levels-count",
+    "question": "How many levels are in the career framework?",
+    "ground_truth": "Seven levels, L1 (Associate) through L7 (Distinguished / VP+).",
+    "expected_document_ids": ["people-career/career-framework-overview.md"],
+    "department": "people-career",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "manager-span-of-control",
+    "question": "What is the target number of direct reports for a people manager?",
+    "ground_truth": "5 to 8 direct reports; consistently above 8 signals the manager is under-resourced for the management work.",
+    "expected_document_ids": ["people-career/manager-expectations.md"],
+    "department": "people-career",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "leveling-domain-direction",
+    "question": "At which engineering level does someone start setting technical direction for a whole domain and mentoring L1-L3 engineers?",
+    "ground_truth": "L4 — cross-team technical leadership: sets technical direction for a domain and mentors L1-L3.",
+    "expected_document_ids": ["people-career/engineering-leveling-matrix.csv"],
+    "department": "people-career",
+    "difficulty": "hard",
+    "query_type": "tabular"
+  },
+  {
+    "id": "severance-formula",
+    "question": "How is involuntary severance pay calculated, and what are the minimum and maximum?",
+    "ground_truth": "2 weeks of base pay per completed year of service, with a floor of 4 weeks and a cap of 26 weeks.",
+    "expected_document_ids": ["hr/severance-guidelines.md", "hr/severance-schedule.csv"],
+    "department": "hr",
+    "difficulty": "hard",
+    "query_type": "cross_doc"
+  },
+  {
+    "id": "company-car-fuel-return",
+    "question": "Who pays for fuel on a company car, and what happens to the car when the employee leaves?",
+    "ground_truth": "Fuel and routine maintenance for business use are covered by the company fuel card; the car must be returned in good condition when the role no longer requires it or employment ends, coordinated through the IT/facilities equipment-return process.",
+    "expected_document_ids": ["finance/expenses-and-reimbursement.md", "it/equipment-and-devices.md"],
+    "department": "finance",
+    "difficulty": "hard",
+    "query_type": "cross_doc"
+  },
+  {
+    "id": "report-misconduct-anonymously",
+    "question": "An employee wants to flag wrongdoing but is afraid to be identified. Is there a way to report it without giving their name?",
+    "ground_truth": "Yes — the Ethics Hotline is anonymous and available 24/7 for reports of any policy violation, including harassment, fraud, or misconduct.",
+    "expected_document_ids": ["legal-compliance/anti-harassment-and-grievance.md"],
+    "department": "legal-compliance",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "india-posh-icc",
+    "question": "For a sexual harassment complaint raised by an India-based employee, which body handles it?",
+    "ground_truth": "The Internal Complaints Committee (ICC) under India's Prevention of Sexual Harassment at Workplace (POSH) Act 2013, running in parallel with the company's anti-harassment policy.",
+    "expected_document_ids": ["legal-compliance/anti-harassment-and-grievance.md"],
+    "department": "legal-compliance",
+    "difficulty": "hard",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "bullying-vs-feedback",
+    "question": "Is a manager holding someone to performance standards or giving tough feedback considered bullying?",
+    "ground_truth": "No. Constructive feedback, holding people to performance standards, and restructuring decisions are explicitly not bullying.",
+    "expected_document_ids": ["legal-compliance/anti-harassment-and-grievance.md"],
+    "department": "legal-compliance",
+    "difficulty": "moderate",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "alcohol-at-work",
+    "question": "Can an employee show up to work after having had a few drinks?",
+    "ground_truth": "No. The workplace is drug-free and reporting to work under the influence of alcohol or illegal drugs is prohibited.",
+    "expected_document_ids": ["hr/code-of-conduct.md"],
+    "department": "hr",
+    "difficulty": "easy",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "workplace-violence-consequence",
+    "question": "What happens if an employee physically threatens or intimidates a coworker?",
+    "ground_truth": "Workplace violence — threats, physical aggression, or intimidation — is grounds for immediate removal from the premises and may result in termination and referral to law enforcement.",
+    "expected_document_ids": ["hr/code-of-conduct.md"],
+    "department": "hr",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "manager-dating-report",
+    "question": "Can a team lead quietly be in a romantic relationship with one of their own direct reports?",
+    "ground_truth": "No. A manager must never be in a direct reporting relationship with someone they are dating; it must be disclosed to HR so reporting lines can be adjusted.",
+    "expected_document_ids": ["hr/code-of-conduct.md"],
+    "department": "hr",
+    "difficulty": "hard",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "conflict-of-interest-disclose",
+    "question": "What should an employee do if they hold a financial stake in one of the company's suppliers?",
+    "ground_truth": "Disclose the actual or potential conflict to their manager and HR as soon as they become aware; failing to disclose is itself the violation.",
+    "expected_document_ids": ["hr/code-of-conduct.md"],
+    "department": "hr",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "retaliation-prohibited",
+    "question": "Is it allowed to punish someone for filing a harassment complaint in good faith?",
+    "ground_truth": "No. The company strictly prohibits retaliation against anyone who reports harassment in good faith or participates in an investigation.",
+    "expected_document_ids": ["legal-compliance/anti-harassment-and-grievance.md"],
+    "department": "legal-compliance",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "new-joiner-buddy",
+    "question": "When someone joins, do they get a person to help them settle in, and who is it?",
+    "ground_truth": "Yes — a buddy is assigned on or before Day 1: a peer-level employee (not the manager) who has been at the company at least 6 months, acting as an informal guide for the first 90 days.",
+    "expected_document_ids": ["hr/new-joiner-onboarding.md"],
+    "department": "hr",
+    "difficulty": "easy",
+    "query_type": "vocab_gap"
+  },
+  {
+    "id": "pip-rating-trigger",
+    "question": "What performance review rating typically triggers a formal improvement plan?",
+    "ground_truth": "A rating of 1 (Does Not Meet Expectations) on the 1–5 scale typically triggers a PIP, or sustained documented issues unresolved after informal coaching.",
+    "expected_document_ids": ["hr/performance-improvement-plan.md"],
+    "department": "hr",
+    "difficulty": "moderate",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "new-hire-equipment-sla",
+    "question": "How quickly is IT expected to have a new hire's laptop and accounts ready?",
+    "ground_truth": "Within 3 business days of HR logging the confirmed start date; standard kit (laptop, headset, peripherals) and core tools are provisioned before Day 1.",
+    "expected_document_ids": ["hr/new-joiner-onboarding.md", "it/software-access-and-licenses.md"],
+    "department": "it",
+    "difficulty": "moderate",
+    "query_type": "cross_doc"
+  },
+  {
+    "id": "interview-loop-stages",
+    "question": "How many interview stages does a full-time candidate go through?",
+    "ground_truth": "A 4-stage interview loop: recruiter screen, hiring manager screen, technical/functional assessment, and a culture and values interview.",
+    "expected_document_ids": ["hr/hiring-and-interview-rubric.md"],
+    "department": "hr",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  },
+  {
+    "id": "sev1-recovery-objective",
+    "question": "What is the recovery time objective for a SEV1 critical incident?",
+    "ground_truth": "4 hours — the RTO (target time from declaration to service restoration) for a SEV1 incident; its RPO is 1 hour.",
+    "expected_document_ids": ["it/incident-response-playbook.md"],
+    "department": "it",
+    "difficulty": "hard",
+    "query_type": "tabular"
+  },
+  {
+    "id": "mandatory-password-manager",
+    "question": "Which password manager are all employees required to use?",
+    "ground_truth": "1Password — the company password manager, mandatory for all employees and provisioned by IT.",
+    "expected_document_ids": ["it/software-access-and-licenses.md"],
+    "department": "it",
+    "difficulty": "easy",
+    "query_type": "single_doc"
+  }
+]

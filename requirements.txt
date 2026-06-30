@@ -2,8 +2,34 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-dotenv>=1.0.0
 pydantic>=2.6.0
-google-generativeai>=0.5.0
+psycopg[binary]>=3.2.0
+litellm>=1.0.0
 chromadb>=0.5.0
 sentence-transformers>=2.6.0
-streamlit>=1.32.0
+pypdf>=4.2.0
 requests>=2.31.0
+rank_bm25>=0.2.2
+# SSE token streaming for POST /chat/stream
+sse-starlette>=2.1.0
+# Per-user/IP rate limiting at the API edge
+slowapi>=0.1.9
+langchain-core>=0.3.0
+langchain-chroma>=0.1.0
+langchain-huggingface>=0.1.0
+langchain-text-splitters>=0.3.0
+
+
+# Auth
+bcrypt>=4.1.0
+PyJWT>=2.8.0
+# Multipart form parsing for admin document upload (FastAPI File/Form)
+python-multipart>=0.0.9
+
+# Tabular corpus ingestion (.xlsx loader)
+openpyxl>=3.1.0
+# Dev/scripts only: generate_benefits_pdf.py (committed PDF needs no runtime reportlab)
+reportlab>=4.0.0
+
+# Test
+pytest>=8.0.0
+httpx>=0.27.0

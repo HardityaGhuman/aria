@@ -1,0 +1,267 @@
+import { useMemo, useRef, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { AppShell } from "../components/AppShell";
+import { Button } from "../components/Button";
+import { StatusBadge } from "../components/StatusBadge";
+import { listDocuments, uploadDocument, deleteDocument, reindex } from "../lib/api/admin";
+
+const DEPARTMENTS = [
+  "hr",
+  "finance",
+  "it",
+  "time-and-leave",
+  "benefits",
+  "legal-compliance",
+  "people-career",
+];
+const STATUSES = ["all", "queued", "processing", "indexed", "failed"];
+// Metadata an HR uploader stamps on the next upload (written into a .meta.yaml
+// sidecar server-side). Must mirror the backend allow-lists in routes/admin.py.
+const ACCESS_TIERS = ["all", "manager", "hr_only"];
+const REGIONS = ["global", "us", "india"];
+const DOC_STATUSES = ["active", "superseded"];
+
+export default function AdminDocuments() {
+  const qc = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  // Doubles as the table's department filter ("all" = no filter) and the upload
+  // target. Upload is blocked while "all" is selected (no concrete department).
+  const [dept, setDept] = useState("all");
+  // Metadata applied to the next upload (sidecar written server-side).
+  const [tier, setTier] = useState("all");
+  const [region, setRegion] = useState("global");
+  const [docStatus, setDocStatus] = useState("active");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // document_id pending delete confirmation (inline, mirrors the sidebar chat list).
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const { data } = useQuery({
+    queryKey: ["documents"],
+    queryFn: listDocuments,
+    // Poll while anything is still processing so status badges advance.
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((d) => d.status === "queued" || d.status === "processing")
+        ? 2000
+        : false,
+  });
+
+  const upload = useMutation({
+    mutationFn: ({ file }: { file: File }) =>
+      uploadDocument(file, dept, { access_tier: tier, region, doc_status: docStatus }),
+    onSuccess: (r) => {
+      setNotice(`Queued ${r.document_id}`);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (e: any) => setNotice(e?.message ?? "Upload failed"),
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => deleteDocument(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["documents"] }),
+  });
+  const rebuild = useMutation({
+    mutationFn: reindex,
+    onSuccess: (r) => {
+      setNotice(`Reindexed: +${r.indexed}, -${r.deleted}, skipped ${r.skipped}`);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+
+  const rows = useMemo(() => {
+    let r = data ?? [];
+    if (dept !== "all") r = r.filter((d) => d.department === dept);
+    if (statusFilter !== "all") r = r.filter((d) => d.status === statusFilter);
+    if (search.trim()) r = r.filter((d) => d.document_id.toLowerCase().includes(search.toLowerCase()));
+    return r;
+  }, [data, dept, statusFilter, search]);
+
+  return (
+    <AppShell>
+      <div className="py-2">
+        <div className="mb-6 flex items-start justify-between">
+          <div>
+            <h1 className="mb-1 text-[24px] font-semibold tracking-tight">HR Documents</h1>
+            <p className="text-[14px] text-text-secondary">
+              Manage and index the internal policy knowledge base.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => rebuild.mutate()} disabled={rebuild.isPending}>
+              {rebuild.isPending ? "Rebuilding…" : "↻ Rebuild index"}
+            </Button>
+            <Button onClick={() => fileRef.current?.click()} disabled={upload.isPending}>
+              {upload.isPending ? "Uploading…" : "↑ Upload Document"}
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  if (dept === "all") {
+                    setNotice("Pick a department before uploading.");
+                  } else {
+                    upload.mutate({ file: f });
+                  }
+                }
+                e.target.value = "";
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="mb-3 flex items-center gap-3">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search documents…"
+            className="flex-1 rounded-lg border border-hairline bg-surface px-3 py-2 text-[14px] outline-none focus:border-ink"
+          />
+          <select
+            value={dept}
+            onChange={(e) => setDept(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-3 py-2 text-[14px] outline-none focus:border-ink"
+            title="Filter the list by department; also the target department for uploads"
+          >
+            <option value="all">All departments</option>
+            {DEPARTMENTS.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-3 py-2 text-[14px] outline-none focus:border-ink"
+          >
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s === "all" ? "All statuses" : s}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+          <span className="text-text-tertiary">New upload metadata:</span>
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Access tier stamped on the next upload"
+          >
+            {ACCESS_TIERS.map((t) => (
+              <option key={t} value={t}>
+                tier: {t}
+              </option>
+            ))}
+          </select>
+          <select
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Region stamped on the next upload"
+          >
+            {REGIONS.map((r) => (
+              <option key={r} value={r}>
+                region: {r}
+              </option>
+            ))}
+          </select>
+          <select
+            value={docStatus}
+            onChange={(e) => setDocStatus(e.target.value)}
+            className="rounded-lg border border-hairline bg-surface px-2 py-1.5 text-[13px] outline-none focus:border-ink"
+            title="Status stamped on the next upload (superseded docs are excluded from retrieval)"
+          >
+            {DOC_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                status: {s}
+              </option>
+            ))}
+          </select>
+          <span className="text-text-tertiary">
+            (md/txt with inline frontmatter override these)
+          </span>
+        </div>
+
+        {notice && (
+          <div className="mb-3 rounded-lg bg-canvas px-3 py-2 text-[13px] text-text-secondary">
+            {notice}
+          </div>
+        )}
+
+        <div className="overflow-hidden rounded-card border border-hairline bg-surface">
+          <table className="w-full text-left text-[14px]">
+            <thead className="border-b border-hairline text-[12px] uppercase tracking-wide text-text-tertiary">
+              <tr>
+                <th className="px-4 py-3 font-medium">Document</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Department</th>
+                <th className="px-4 py-3 font-medium">Updated</th>
+                <th className="w-[120px] px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d) => (
+                <tr key={d.document_id} className="border-b border-hairline last:border-b-0">
+                  <td className="px-4 py-3 font-mono text-[13px]">{d.document_id}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={d.status} />
+                  </td>
+                  <td className="px-4 py-3 text-text-secondary">{d.department}</td>
+                  <td className="px-4 py-3 text-text-tertiary">
+                    {d.updated_at ? new Date(d.updated_at).toLocaleDateString() : "—"}
+                  </td>
+                  <td className="w-[120px] px-4 py-3 text-right">
+                    {confirming === d.document_id ? (
+                      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px]">
+                        <span className="text-text-tertiary">Delete?</span>
+                        <button
+                          className="font-medium text-badge-hr hover:underline"
+                          aria-label="confirm delete"
+                          onClick={() => {
+                            del.mutate(d.document_id);
+                            setConfirming(null);
+                          }}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          className="text-text-tertiary hover:text-text-ink"
+                          aria-label="cancel delete"
+                          onClick={() => setConfirming(null)}
+                        >
+                          No
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="text-text-tertiary hover:text-badge-hr"
+                        aria-label="delete"
+                        title="Delete"
+                        onClick={() => setConfirming(d.document_id)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-text-tertiary">
+                    No documents.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </AppShell>
+  );
+}

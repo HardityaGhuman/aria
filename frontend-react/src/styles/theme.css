@@ -1,0 +1,129 @@
+/* Font imports must precede all other statements (CSS @import rule). */
+@import url("https://rsms.me/inter/inter.css");
+@import url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-sans/style.css");
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-hairline: #e8e8ed;
+  --color-ink: #1d1d1f;
+  --color-marigold: #f0a23c;
+  --color-text-ink: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #aeaeb2;
+  --color-badge-all: #e8e8ed;
+  --color-badge-manager: #f0a23c;
+  --color-badge-hr: #c2415b;
+  --color-on-ink: #ffffff;
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "Geist", ui-monospace, monospace;
+
+  --radius-card: 0.875rem; /* ~14px, Stitch 12–16px container range */
+
+  --shadow-card: 0px 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+/* Dark theme: override the semantic tokens; every component reads these vars,
+   so flipping them here flips the whole UI. Toggled via `.dark` on <html>. */
+.dark {
+  --color-canvas: #0f0f10;
+  --color-surface: #1a1a1c;
+  --color-hairline: #2c2c30;
+  --color-ink: #f0f0f2; /* primary buttons/avatars become light on dark */
+  --color-on-ink: #1a1a1c;
+  --color-text-ink: #ececee;
+  --color-text-secondary: #a0a0a6;
+  --color-text-tertiary: #6c6c72;
+  --color-badge-all: #2c2c30;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* Themed scrollbar — thin, rounded, token-colored (so it goes dark in dark
+   mode), with a transparent inset border so the thumb never hugs the content. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+  background-clip: content-box;
+}
+
+/* Make Tailwind's `dark:` variant follow our `.dark` class (not OS preference),
+   so the Aurora background's dark variants match the app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Aurora background palette — neutral base + marigold accent (replaces the
+   Aceternity blue/indigo/violet). Referenced by the AuroraBackground component. */
+:root {
+  --white: #ffffff;
+  --black: #000000;
+  --transparent: transparent;
+  --aurora-1: #f0a23c;
+  --aurora-2: #f7c576;
+  --aurora-3: #e89028;
+  --aurora-4: #ffe0b0;
+  --aurora-5: #d97a1e;
+}
+
+@keyframes aurora {
+  from {
+    background-position:
+      50% 50%,
+      50% 50%;
+  }
+  to {
+    background-position:
+      350% 50%,
+      350% 50%;
+  }
+}
+.animate-aurora {
+  animation: aurora 60s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-aurora {
+    animation: none;
+  }
+}
+
+/* Whisper-faint dot grid that fills the page surface (theme-aware, static). */
+.aria-dotgrid {
+  background-image: radial-gradient(circle, rgba(20, 20, 25, 0.05) 1px, transparent 1.5px);
+  background-size: 22px 22px;
+}
+.dark .aria-dotgrid {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.05) 1px, transparent 1.5px);
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-text-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}

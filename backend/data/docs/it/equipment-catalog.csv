@@ -1,0 +1,9 @@
+asset_id,category,model,specs,cost_usd,refresh_years
+LAP-001,Laptop,MacBook Air M4,Apple M4 chip 16GB RAM 512GB SSD,1299,4
+LAP-002,Laptop,MacBook Pro M4 Pro,Apple M4 Pro chip 24GB RAM 512GB SSD,1999,4
+LAP-003,Laptop,Dell XPS 15,Intel Core Ultra 7 32GB RAM 1TB SSD,1799,4
+MON-001,Monitor,Dell UltraSharp U2724DE,27-inch 4K IPS USB-C Hub 60Hz,699,5
+MON-002,Monitor,LG UltraWide 34WN80C,34-inch 21:9 IPS USB-C 60Hz,499,5
+KEY-001,Keyboard,Logitech MX Keys,Wireless Bluetooth multi-device backlit,99,5
+MOU-001,Mouse,Logitech MX Master 3S,Wireless Bluetooth multi-device,99,5
+CAM-001,Webcam,Logitech C920 HD Pro,1080p 30fps autofocus USB,79,5

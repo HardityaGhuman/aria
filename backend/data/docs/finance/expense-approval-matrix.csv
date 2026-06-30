@@ -1,0 +1,4 @@
+tier,role,single_txn_limit_usd,monthly_limit_usd,approver
+IC,Individual Contributor,1000,3000,manager
+Manager,Manager,10000,25000,director
+Director,Director,50000,100000,CFO
