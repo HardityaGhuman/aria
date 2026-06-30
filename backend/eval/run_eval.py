@@ -40,16 +40,20 @@ def run(per_level: int = 5, strategy: str = "hybrid", delay_seconds: float = 12)
     # Per-question combined rows (subset order is identical in both passes).
     rows = [
         {
+            "id": rr["id"],
             "question": rr["question"],
             "difficulty": rr["difficulty"],
-            "recall": rr["recall"],
-            "hit": rr["hit"],
-            "mrr": rr["mrr"],
-            "context_hit_rate": rr["hit_rate"],
+            "query_type": rr["query_type"],
+            "doc_recall": rr["doc_recall"],
+            "doc_precision": rr["doc_precision"],
+            "doc_hit": rr["doc_hit"],
+            "doc_mrr": rr["doc_mrr"],
             "answer_coverage": s["answer_coverage"],
         }
         for rr, s in zip(retr_rows, samples)
     ]
+
+    metric_names = ("doc_recall", "doc_precision", "doc_hit", "doc_mrr", "answer_coverage")
 
     def by_diff(metric: str) -> dict:
         return {
@@ -63,8 +67,8 @@ def run(per_level: int = 5, strategy: str = "hybrid", delay_seconds: float = 12)
         "k": RETRIEVAL_TOP_K,
         "per_level": per_level,
         "counts": counts,
-        "overall": {m: _avg([r[m] for r in rows]) for m in ("recall", "hit", "mrr", "context_hit_rate", "answer_coverage")},
-        "by_difficulty": {m: by_diff(m) for m in ("recall", "hit", "mrr", "context_hit_rate", "answer_coverage")},
+        "overall": {m: _avg([r[m] for r in rows]) for m in metric_names},
+        "by_difficulty": {m: by_diff(m) for m in metric_names},
         "rows": rows,
     }
 
@@ -74,14 +78,16 @@ def run(per_level: int = 5, strategy: str = "hybrid", delay_seconds: float = 12)
     path.write_text(json.dumps(combined, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Summary.
-    print("\n           | recall | hit  | mrr  | ctxhit | ans_cov")
-    print("-" * 52)
+    print("\n           | recall | prec | hit  | mrr  | ans_cov")
+    print("-" * 56)
     for lvl in DIFFICULTIES:
-        b = {m: combined["by_difficulty"][m][lvl] for m in combined["by_difficulty"]}
-        print(f"{lvl:>10} | {b['recall']:.2f}   | {b['hit']:.2f} | {b['mrr']:.2f} | {b['context_hit_rate']:.2f}   | {b['answer_coverage']:.2f}")
+        b = {m: combined["by_difficulty"][m][lvl] for m in metric_names}
+        print(f"{lvl:>10} | {b['doc_recall']:.2f}   | {b['doc_precision']:.2f} | "
+              f"{b['doc_hit']:.2f} | {b['doc_mrr']:.2f} | {b['answer_coverage']:.2f}")
     o = combined["overall"]
-    print("-" * 52)
-    print(f"{'overall':>10} | {o['recall']:.2f}   | {o['hit']:.2f} | {o['mrr']:.2f} | {o['context_hit_rate']:.2f}   | {o['answer_coverage']:.2f}")
+    print("-" * 56)
+    print(f"{'overall':>10} | {o['doc_recall']:.2f}   | {o['doc_precision']:.2f} | "
+          f"{o['doc_hit']:.2f} | {o['doc_mrr']:.2f} | {o['answer_coverage']:.2f}")
     print(f"\nSaved combined metrics -> {path}")
     print(f"RAGAS next (isolated venv): eval_venv/bin/python backend/eval/ragas/run_ragas.py {len(rows)}")
     return path
