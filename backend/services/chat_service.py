@@ -7,6 +7,7 @@ answer scoring. Routes delegate here and stay thin.
 """
 import asyncio
 import os
+import re
 import time
 from dataclasses import dataclass
 
@@ -58,6 +59,161 @@ NO_RESULTS_MESSAGE = (
     "I couldn't find specific information on that in the handbook. "
     "Please check with HR or the Executive Director."
 )
+_NO_RESULTS_BY_LANGUAGE = {
+    "Spanish": (
+        "No encontré información específica sobre eso en el manual. Por favor, "
+        "consulta con RR. HH. o con la Dirección Ejecutiva."
+    ),
+    "French": (
+        "Je n'ai pas trouvé d'information précise à ce sujet dans le manuel. "
+        "Veuillez vous adresser aux RH ou à la Direction."
+    ),
+    "German": (
+        "Dazu habe ich im Handbuch keine konkreten Informationen gefunden. Bitte "
+        "wenden Sie sich an die Personalabteilung oder die Geschäftsleitung."
+    ),
+    "Hindi": (
+        "मुझे इस बारे में पुस्तिका में कोई विशिष्ट जानकारी नहीं मिली। कृपया HR या "
+        "कार्यकारी निदेशक से संपर्क करें।"
+    ),
+}
+
+# A fixed, never-translated token the answer model emits when the retrieved
+# context cannot answer the question at all. Detecting THIS instead of parsing
+# the model's prose makes the ungrounded-answer guard language-agnostic — a
+# translated "not enough information" sentence no longer slips past an
+# English-only matcher and drags real sources onto an answer that used none.
+NO_CONTEXT_SENTINEL = "__NO_CONTEXT_ANSWER__"
+
+
+def _localized_no_results(language: str | None) -> str:
+    """The 'couldn't find that' message in the user's language, English fallback."""
+    return _NO_RESULTS_BY_LANGUAGE.get(language or "", NO_RESULTS_MESSAGE)
+
+
+def _is_no_context_sentinel(reply: str) -> bool:
+    """True when the model signalled it cannot answer from the retrieved context."""
+    return reply.strip().startswith(NO_CONTEXT_SENTINEL)
+
+# Pre-translated refusals for the languages the frontend offers (English variants
+# normalize to "English"). The out-of-scope path returns instantly with no LLM
+# call, so we cannot ask the model to translate — and would not want to spend a
+# call on a fixed sentence. A language outside this set falls back to English.
+_REFUSAL_BY_LANGUAGE = {
+    "Spanish": (
+        "Soy un asistente de políticas de la empresa, así que solo puedo ayudar "
+        "con preguntas sobre las políticas y operaciones de la empresa. Por favor, "
+        "haz una pregunta relacionada con las políticas."
+    ),
+    "French": (
+        "Je suis un assistant dédié aux politiques de l'entreprise ; je ne peux "
+        "donc répondre qu'aux questions portant sur les politiques et le "
+        "fonctionnement de l'entreprise. Veuillez poser une question relative aux "
+        "politiques."
+    ),
+    "German": (
+        "Ich bin ein Assistent für Unternehmensrichtlinien und kann daher nur bei "
+        "Fragen zu den Richtlinien und Abläufen des Unternehmens helfen. Bitte "
+        "stellen Sie eine Frage zu den Richtlinien."
+    ),
+    "Hindi": (
+        "मैं एक कंपनी नीति सहायक हूँ, इसलिए मैं केवल कंपनी की नीतियों और कार्यों से "
+        "संबंधित प्रश्नों में ही मदद कर सकती हूँ। कृपया नीति से संबंधित प्रश्न पूछें।"
+    ),
+}
+
+
+def _localized_refusal(language: str | None) -> str:
+    """The out-of-scope refusal in the user's language, English as the fallback."""
+    return _REFUSAL_BY_LANGUAGE.get(language or "", REFUSAL_MESSAGE)
+
+
+CLARIFY_MESSAGE = (
+    "I didn't quite catch that. Could you ask a specific policy question — for "
+    "example about leave, benefits, expenses, equipment, or conduct?"
+)
+_CLARIFY_BY_LANGUAGE = {
+    "Spanish": (
+        "No entendí bien. ¿Podrías hacer una pregunta concreta sobre las políticas "
+        "— por ejemplo sobre permisos, beneficios, gastos, equipos o conducta?"
+    ),
+    "French": (
+        "Je n'ai pas bien compris. Pourriez-vous poser une question précise sur les "
+        "politiques — par exemple sur les congés, les avantages, les frais, le "
+        "matériel ou la conduite ?"
+    ),
+    "German": (
+        "Das habe ich nicht ganz verstanden. Könnten Sie eine konkrete Frage zu den "
+        "Richtlinien stellen — zum Beispiel zu Urlaub, Leistungen, Ausgaben, "
+        "Ausstattung oder Verhalten?"
+    ),
+    "Hindi": (
+        "मैं ठीक से समझ नहीं पाई। क्या आप किसी विशेष नीति के बारे में प्रश्न पूछ सकते हैं "
+        "— जैसे छुट्टी, लाभ, खर्च, उपकरण या आचरण के बारे में?"
+    ),
+}
+
+# Tokens that carry no answerable content on their own. A message made up only of
+# these (or punctuation) is filler, not a question — it should prompt a
+# clarification rather than be force-fit into a fabricated retrieval query.
+_FILLER_TOKENS = {
+    "um", "umm", "ummm", "uh", "uhh", "uhm", "hmm", "hm", "hmmm", "erm", "eh",
+    "meh", "idk", "dunno", "huh", "ok", "okay", "k", "kk", "yeah", "ya", "yep",
+    "yup", "oh", "ah", "so", "well", "uhh", "mm", "mmm",
+}
+
+
+def _localized_clarify(language: str | None) -> str:
+    """The clarification prompt in the user's language, English as the fallback."""
+    return _CLARIFY_BY_LANGUAGE.get(language or "", CLARIFY_MESSAGE)
+
+
+def _is_low_content_message(message: str) -> bool:
+    """True when the message is empty, punctuation-only, or made up entirely of
+    filler tokens (``umm``, ``idk``, ``ok``) — i.e. carries no question to answer."""
+    words = re.findall(r"[a-z]+", message.lower())
+    if not words:
+        return True  # empty or punctuation-only ("???", "  ")
+    return all(word in _FILLER_TOKENS for word in words)
+
+
+# Phrases that signal the user wants the PREVIOUS answer re-explained, not a new
+# topic. Matched as substrings, plus a few bare one-word forms. Kept specific so a
+# real question that merely contains "explain" ("explain the remote work policy")
+# is not misread as a rephrase.
+_REPHRASE_PATTERNS = (
+    "dont get it", "don't get it", "do not get it", "didnt understand",
+    "didn't understand", "not understand", "in simpler", "simpler terms",
+    "simplify", "in other words", "rephrase", "reword", "explain it better",
+    "explain better", "better terms", "one by one", "step by step",
+    "explain again", "say it differently", "explain differently",
+    "put it differently", "tell me more", "more detail", "copy paste",
+    "copy pasted", "same words", "same thing again",
+)
+_REPHRASE_EXACT = {"elaborate", "explain", "go on", "continue", "more"}
+
+
+def _is_rephrase_request(message: str) -> bool:
+    """True when the message asks to re-explain the previous answer differently."""
+    norm = message.lower().strip().strip("?.! ")
+    if norm in _REPHRASE_EXACT:
+        return True
+    return any(pattern in norm for pattern in _REPHRASE_PATTERNS)
+
+
+def _has_prior_answer(history: list[dict]) -> bool:
+    """True when the conversation already has an assistant turn to re-explain."""
+    return any(msg.get("role") == "assistant" for msg in history)
+
+
+_REEXPLAIN_DIRECTIVE = (
+    "The user did not understand your previous reply. Re-explain the SAME "
+    "information more simply and in different words, broken into clear, separate "
+    "points. Do not reuse your earlier phrasing or repeat the same sentences."
+)
+# Above 0 so a re-explain can't return the byte-identical text the user rejected,
+# but low enough to stay grounded in the retrieved policy text.
+_REEXPLAIN_TEMPERATURE = 0.4
 CONFIDENTIAL_MESSAGE = (
     "That information is restricted and isn't available at your access level. "
     "Please contact {contact} for details."
@@ -183,6 +339,17 @@ def _preferences_note(owner_user_id: int | None) -> str | None:
     return block or None
 
 
+def _user_language(owner_user_id: int | None) -> str:
+    """The user's stored language (normalized), or 'English'. Best-effort: a prefs
+    DB hiccup must never break the no-LLM refusal/clarify paths that use it."""
+    if owner_user_id is None:
+        return "English"
+    try:
+        return get_preferences(owner_user_id).get("language") or "English"
+    except PreferencesError:
+        return "English"
+
+
 async def _resolve_search_query(message: str, formatted_history: list[dict]) -> str:
     """Rewrite the message into a standalone search query (history-aware) so
     follow-ups retrieve correctly. Falls back to the original on any failure."""
@@ -203,6 +370,7 @@ async def _answer_policy_query(
     allowed_tiers: list[str] | None,
     allowed_regions: list[str] | None = None,
     preferences: str | None = None,
+    language: str = "English",
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
@@ -210,7 +378,16 @@ async def _answer_policy_query(
         contact = retrieved.blocked_contact or "HR"
         return ChatResult(CONFIDENTIAL_MESSAGE.format(contact=contact), "", [], status="blocked")
     if not retrieved.sources:
-        return ChatResult(NO_RESULTS_MESSAGE, "", [], status="no_results")
+        return ChatResult(_localized_no_results(language), "", [], status="no_results")
+
+    # If the user asked to re-explain the previous answer, push a "say it
+    # differently" directive and raise the temperature — at temperature 0 the same
+    # query retrieves the same chunks and the model returns byte-identical text.
+    extra_directive = None
+    temperature = 0.0
+    if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
+        extra_directive = _REEXPLAIN_DIRECTIVE
+        temperature = _REEXPLAIN_TEMPERATURE
 
     reply = await _run_blocking(
         get_llm_response,
@@ -219,14 +396,20 @@ async def _answer_policy_query(
         context=retrieved.text,
         history=formatted_history,
         preferences=preferences,
+        extra_directive=extra_directive,
+        temperature=temperature,
     )
 
     # A refusal or "not enough info" reply isn't grounded in the retrieved
-    # chunks, so drop the context and sources.
+    # chunks, so drop the context and sources. The sentinel is the primary,
+    # language-agnostic signal; the English string matchers stay as a fallback
+    # for a model that answered in English without emitting the token.
+    if _is_no_context_sentinel(reply):
+        return ChatResult(_localized_no_results(language), "", [], status="no_results")
     if _is_refusal(reply):
         return ChatResult(reply, "", [], status="refused")
     if _is_insufficient_policy_answer(reply):
-        return ChatResult(reply, "", [], status="no_results")
+        return ChatResult(_localized_no_results(language), "", [], status="no_results")
     return ChatResult(reply, retrieved.text, retrieved.sources, status="ok")
 
 
@@ -256,6 +439,18 @@ async def generate_chat_reply(
 
         formatted_history = _prepare_history(session_id)
 
+        # Bare filler ("umm", "idk") carries no question — clarify before spending a
+        # classify call or letting the rewriter fabricate a search query from noise.
+        if _is_low_content_message(message):
+            classification = "clarify"
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            result = ChatResult(_localized_clarify(language), "", [], status="no_results")
+            try:
+                append_exchange(session_id, message, result.reply, owner_user_id=owner_user_id, sources=[])
+            except ChatMemoryError as e:
+                raise HTTPException(status_code=503, detail=e.message)
+            return result
+
         # Classify before retrieval so meta and out-of-scope queries skip RAG.
         classification = await _run_blocking(
             classify_query,
@@ -265,7 +460,8 @@ async def generate_chat_reply(
         )
 
         if classification == "out_of_scope":
-            result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            result = ChatResult(_localized_refusal(language), "", [], status="refused")
         elif classification == "chitchat":
             # Pass preferences (language) so a greeting honors the same language as
             # policy/meta answers — otherwise the language setting appears to apply at
@@ -292,8 +488,10 @@ async def generate_chat_reply(
             result = ChatResult(reply, "", [], status="ok")
         else:
             pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+            language = await asyncio.to_thread(_user_language, owner_user_id)
             result = await _answer_policy_query(
-                message, formatted_history, allowed_tiers, allowed_regions, preferences=pref_note
+                message, formatted_history, allowed_tiers, allowed_regions,
+                preferences=pref_note, language=language,
             )
 
         try:
@@ -418,12 +616,28 @@ async def stream_chat_reply(
             return
 
         formatted_history = _prepare_history(session_id)
+
+        # Bare filler ("umm", "idk") → clarify before classify/rewrite/retrieval.
+        if _is_low_content_message(message):
+            classification = "clarify"
+            final_status = "no_results"
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            clarify = _localized_clarify(language)
+            yield {"event": "token", "data": {"delta": clarify}}
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(clarify, [], "no_results")}
+            await _persist_quietly(session_id, message, clarify, owner_user_id)
+            return
+
         classification = await asyncio.to_thread(classify_query, message, formatted_history)
 
         if classification == "out_of_scope":
             final_status = "refused"
-            yield {"event": "done", "data": _envelope(REFUSAL_MESSAGE, [], "refused")}
-            await _persist_quietly(session_id, message, REFUSAL_MESSAGE, owner_user_id)
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            refusal = _localized_refusal(language)
+            yield {"event": "token", "data": {"delta": refusal}}
+            yield {"event": "done", "data": _envelope(refusal, [], "refused")}
+            await _persist_quietly(session_id, message, refusal, owner_user_id)
             return
 
         if classification == "chitchat":
@@ -471,20 +685,53 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
 
-        token_iter = stream_llm_response(message, retrieved.text, formatted_history, pref_note)
+        # Same re-explain handling as the sync path: vary the reply when the user
+        # asked to rephrase the previous answer, so streaming doesn't re-emit it verbatim.
+        extra_directive = None
+        temperature = 0.0
+        if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
+            extra_directive = _REEXPLAIN_DIRECTIVE
+            temperature = _REEXPLAIN_TEMPERATURE
+
+        token_iter = stream_llm_response(
+            message, retrieved.text, formatted_history, pref_note,
+            extra_directive=extra_directive, temperature=temperature,
+        )
+        # Gate the leading tokens: the model emits ONLY the no-context sentinel when
+        # it can't answer, and we must not flash that raw token to the user. Buffer
+        # until the text either completes the sentinel (suppress it) or diverges
+        # from it (a real answer — flush the buffer and stream the rest live).
         full_answer = ""
+        gate_open = False
         while True:
             delta = await asyncio.to_thread(_next_token, token_iter)
             if delta is _STREAM_DONE:
                 break
-            if delta:
-                full_answer += delta
+            if not delta:
+                continue
+            full_answer += delta
+            if gate_open:
                 yield {"event": "token", "data": {"delta": delta}}
+                continue
+            stripped = full_answer.lstrip()
+            if not stripped or NO_CONTEXT_SENTINEL.startswith(stripped):
+                continue  # whitespace, or still a possible sentinel prefix — hold
+            gate_open = True
+            yield {"event": "token", "data": {"delta": full_answer}}
 
         # Post-checks mirror the non-streaming path: an ungrounded answer drops
         # its sources and reports the matching status.
         final_sources: list[dict] = []
-        if _is_refusal(full_answer):
+        if not gate_open and _is_no_context_sentinel(full_answer):
+            # The whole reply was the sentinel — never streamed. Replace it with the
+            # localized "couldn't find that" message the user can actually read.
+            final_status = "no_results"
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            full_answer = _localized_no_results(language)
+            yield {"event": "token", "data": {"delta": full_answer}}
+            yield {"event": "sources", "data": {"sources": []}}
+            yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
+        elif _is_refusal(full_answer):
             final_status = "refused"
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "refused")}

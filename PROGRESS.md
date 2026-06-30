@@ -78,7 +78,15 @@ error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 1. **Retrieval recall fix (step 4):** H2-only markdown split (`CHUNK_VERSION …-h2-only-split-v11`) — `###` subsections no longer split off from their parent `##`. Fixed a real leak where a manager asking for the "interview loop stages" got "Stage 2/3 not detailed" because the four `### Stage N` chunks fragmented and TOP_K cut two. Reindexed + verified. ✅ **Gate PASSED:** `benchmark compare` post-split = hybrid recall **0.96→0.99**, precision **0.45 flat**, mrr **0.92→0.94** (`hard` mrr now 1.00) — strictly better, no precision cliff. Step 4 structural work validated; reranker / cross_doc-lift still pending.
 2. **Log-noise cleanup (step 5):** `core/logging.py` now quiets LiteLLM INFO double-prints + "Provider List" banner + uvicorn OPTIONS preflight lines. Telemetry JSON untouched.
    Both verified; **full suite 131 tests green**.
-3. **User flagged a frame of reference for the agentic build is coming** — they'll provide it; start step 10 against it.
+3. **Conversational-quality + i18n batch (2026-07-01, TDD, 151 tests green).** Five fixes from a manager/HR convo analysis + one edge:
+   - **Language honored on the policy route.** Was: preference directive sat only in the system prompt and got out-competed by the large English context block in the user turn, so policy answers stayed English while meta/chitchat honored the language (the "Hindi worked, Spanish didn't" report — really meta-vs-policy). Now: the directive is restated at the END of the augmented user turn, closest to generation (`llm._augmented_message`).
+   - **Localized refusal/clarify/no-results** (es/fr/de/hi maps in `chat_service`) on the no-LLM instant paths.
+   - **Filler → clarify** (`_is_low_content_message`): "umm"/"idk" short-circuit before classify/rewrite (was: rewriter fabricated a query → garbage retrieval).
+   - **No copy-paste re-answer** (`_is_rephrase_request`): "explain it better"/"one by one" → re-explain directive + temp 0.4 (was: temp 0 + same query = byte-identical reply).
+   - **No "the employee" framing leak**: direct-address rule in `docs/system_prompt.txt`.
+   - **Edge — language-agnostic ungrounded detection**: the model emits a fixed never-translated sentinel `__NO_CONTEXT_ANSWER__` when context can't answer; the service detects THAT (not English prose) and returns localized no-results. Streaming gates the leading tokens so the raw sentinel never flashes to the user.
+   - Partially addresses the deferred [[router-contextual-compression]] over-refusal item (filler + rephrase cases) — the 8B classifier still lacks full convo context for the general case.
+4. **User flagged a frame of reference for the agentic build is coming** — they'll provide it; start step 10 against it.
 
 **Step 5 observability tracing/logging is DONE** (shipped 2026-06-30: `core/trace.py`
 + `_invoke` funnel + `request_trace` rollup, 131 backend tests green, smoke-verified).

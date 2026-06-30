@@ -75,6 +75,33 @@ def test_blocked_query_emits_single_done_no_tokens(monkeypatch):
     assert "HR" in events[0]["data"]["answer"]
 
 
+def test_sentinel_reply_never_leaks_and_maps_to_no_results(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(
+        cs, "retrieve_context",
+        lambda *a, **k: RetrievedContext(
+            "ctx", [{"source": "x.md", "chunk": 1, "access_tier": "all", "section": "S"}], status="ok",
+        ),
+    )
+    # Model emits only the sentinel, split across tokens.
+    monkeypatch.setattr(cs, "stream_llm_response",
+                        lambda *a, **k: iter(list(cs.NO_CONTEXT_SENTINEL)))
+
+    events = _collect("s1", "what is the moon made of", ["all"], ["global", "us"])
+
+    # No token (or done answer) may leak the raw sentinel.
+    for e in events:
+        if e["event"] == "token":
+            assert cs.NO_CONTEXT_SENTINEL not in e["data"]["delta"]
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["status"] == "no_results"
+    assert done["data"]["sources"] == []
+    assert cs.NO_CONTEXT_SENTINEL not in done["data"]["answer"]
+    assert done["data"]["answer"] == cs.NO_RESULTS_MESSAGE  # English default
+
+
 def test_empty_message_emits_error_event(monkeypatch):
     _patch_common(monkeypatch)
     events = _collect("s1", "   ", ["all"], ["global", "us"])
