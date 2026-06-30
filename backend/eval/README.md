@@ -1,42 +1,49 @@
 # Evaluation
 
-Two complementary layers, run offline.
+Two offline layers, scored against the real multi-document corpus.
 
-## 1. Retrieval (reference-based) — app venv, no LLM
-Scores retrieval against the labeled dataset (`eval_questions.json`, tagged
-easy/moderate/hard with `expected_sections`). Pure local embeddings + BM25, so
-it's fast and not rate-limited.
+## 1. Retrieval (document-level, no LLM) — app venv
+
+Scores retrieval against `eval_questions.json` (hand-authored, tagged
+easy/moderate/hard and by query_type). A retrieved chunk is relevant iff its
+`metadata["source"]` exactly equals an `expected_document_ids` entry.
 
 ```bash
 python -m backend.eval.benchmark            # hybrid
-python -m backend.eval.benchmark compare    # vector vs bm25 vs hybrid, saved to results/
+python -m backend.eval.benchmark vector     # one strategy
+python -m backend.eval.benchmark compare    # vector vs bm25 vs hybrid -> results/
 ```
-Metrics: `recall@k`, `hit@k`, `mrr`, `context_hit_rate`, broken down by difficulty.
+
+Metrics: `doc_recall@k`, `doc_precision@k` (the noise metric for the document
+viewer), `doc_hit@k`, `doc_mrr` — reported overall, by difficulty, and by
+query_type (`single_doc`/`cross_doc`/`vocab_gap`/`tabular`) so weak corners are
+visible. No LLM calls, so it's fast and not rate-limited. Eval uses the raw
+strategy over the full corpus (no RBAC filter) to isolate ranking quality.
 
 ## 2. Answer quality + RAGAS
-RAGAS's dependencies (its LangChain pins) conflict irreconcilably with the app's,
-so RAGAS lives in a **separate virtualenv** and the app hands it data via JSON.
 
-### a. Export answers (app venv) — throttled to the configured token budget
+RAGAS's LangChain pins conflict with the app's deps, so it runs in a separate
+virtualenv fed JSON by the app.
+
+### a. Export (app venv) — throttled to the token budget
 ```bash
-python -m backend.eval.answers 6     # generate answers + contexts for 6 questions
+python -m backend.eval.answers 6     # answers + contexts for 6 questions
 ```
-Throttle is `LLM_TOKENS_PER_MINUTE` (config, default 12000).
-Writes `results/ragas_input.json` and prints the cheap reference-based answer
-metric (`answer_coverage` = keyword overlap with ground truth).
+Writes `results/ragas_input.json` and prints `answer_coverage` (cheap keyword
+overlap vs ground truth).
 
-### b. Score with real RAGAS (isolated eval venv)
+### b. Score (isolated eval venv)
 ```bash
 python -m venv eval_venv
 eval_venv/bin/pip install -r backend/eval/ragas/requirements.txt   # one-time
 eval_venv/bin/python backend/eval/ragas/run_ragas.py 4
 ```
-Runs the genuine `ragas` library (faithfulness, answer_relevancy,
-context_precision, context_recall) using the same Groq judge model and local
-MiniLM embeddings. Serial with backoff, so the Groq rate limit is respected via
-retries rather than bursting. Scores saved to `results/ragas_scores_*.json`.
+Real RAGAS: faithfulness, answer_relevancy, context_precision, context_recall.
 
-> Keep RAGAS subsets small (a handful of questions): it is token-heavy, so under
-> a constrained provider rate limit larger runs take several minutes.
+### Stratified combined run (retrieval + answers in one)
+```bash
+python -m backend.eval.run_eval 3    # 3 questions per difficulty
+```
 
-`results/` is gitignored — the harness is tracked, individual runs are not.
+> Keep RAGAS subsets small — it is token-heavy under the provider rate limit.
+> `results/` is gitignored: the harness is tracked, individual runs are not.
