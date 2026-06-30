@@ -47,7 +47,7 @@ Each piece is designed → built → understood fully before the next.
         │
 [4] Retrieval quality inspection . 🔄 structural fixes + consistency done; eval run + reranker pending
         │
-[5] Observability ................ 🔄 response envelope done; telemetry + metrics pending
+[5] Observability ................ 🔄 envelope + LLM tracing/rollup done; metrics dashboard pending
         │
 [6] Admin document lifecycle ..... ✅ done  (upload/list/status/delete + reindex)
         │
@@ -71,15 +71,47 @@ prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
 (`/chat/stream`), user-owned sessions (`SessionStore` seam, Redis-ready), a uniform
 error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
-### ▶ Next session — resume here (eval rebuild, step 4 — IN PROGRESS)
+### ▶ NEXT SESSION — resume here (step 5 observability, tracing/logging — PLANNED, not built)
 
-Eval rebuild execution is **underway** (inline `executing-plans`, branch
-`new-frontend`). **Tasks 1–3 done + committed; resume at Task 4.**
+**Planning complete; zero code written.** Brainstorm + spec + full TDD plan done
+this session. A fresh session executes the plan inline (`executing-plans`, no
+subagents).
+
+- Spec: `docs/superpowers/specs/2026-06-30-observability-tracing-design.md` (gitignored)
+- Plan: `docs/superpowers/plans/2026-06-30-observability-tracing.md` (gitignored) — top has an "⏸ EXECUTION STATUS" block; **start at Task 1**.
+- **What it builds:** deterministic LLM trace-back. `core/trace.py` (contextvar `trace_id`, propagates across `asyncio.to_thread`) + a single `_invoke()` funnel in `core/llm.py` wrapping all 7 `litellm.completion` calls → one JSON **span** each (purpose, **small-vs-large model**, exact tokens, latency, cost, status/error). `chat_service` emits one **request_trace** rollup/message (query, classification, retrieval ids+scores, status, latency). Join on `trace_id`. Sink = stdout JSON via a `telemetry` logger (Cloud Logging-ready). `TELEMETRY_ENABLED` kill switch. No new deps.
+- **Decisions locked (brainstorm):** sink = JSON logs (NOT LangSmith — app calls litellm not LangChain runnables, so LangSmith auto-traces nothing + ships policy text out); redaction = query + chunk ids + scores, **never doc body** (tested invariant); scope = spans + rollup only (OTel, metrics dashboard, DB table all deferred).
+- **5 tasks:** (1) trace.py + config flag + tests, (2) `_invoke` funnel + 5 non-stream calls + test_telemetry, (3) rewrite + streaming spans, (4) chat_service trace+rollup both paths + test, (5) regression(119+~13)+smoke+PROGRESS update. TDD, all code in the plan.
+- **Test cmd:** `JWT_SECRET=dummy venv/bin/python -m pytest …` (the `eval_venv` has no pytest — use `venv`).
+
+**Then:** metrics aggregation (P95/P99, rates, cost/query) reads this stream; then hosting (step 8). Order eval → observability → deploy.
+
+---
+
+### Eval rebuild (step 4) — ✅ COMPLETE (all 8 tasks)
+
+Eval rebuild **done** (inline `executing-plans`, branch `new-frontend`). All 8
+tasks committed; **119 backend tests green**.
 
 - Spec: `docs/superpowers/specs/2026-06-29-eval-rebuild-design.md`
-- Plan: `docs/superpowers/plans/2026-06-29-eval-rebuild.md` — top has an "⏸ EXECUTION STATUS" block; re-invoke `executing-plans` and start at **Task 4** (benchmark; full code in the plan).
-- **Done:** Task 1 doc-level metrics, Task 2 dataset loader + corpus-id validation, Task 3 hand-authored dataset (**43 questions** covering professional/personal/unprofessional; all `expected_document_ids` validated against the corpus). 19 eval tests green.
-- **Remaining:** Task 4 benchmark, Task 5 answers.py RAGAS-export fix, Task 6 run_eval.py metric-key update, Task 7 README + cleanup + RAGAS-runner verify, Task 8 baseline run (needs `python -m backend.index_documents` first).
+- Plan: `docs/superpowers/plans/2026-06-29-eval-rebuild.md`
+- **Done:** Task 1 doc-level metrics, Task 2 dataset loader + corpus-id validation, Task 3 hand-authored **43-question** dataset, Task 4 document-level benchmark (difficulty + query_type breakdown), Task 5 answers.py RAGAS-export on the new schema, Task 6 run_eval.py metric-key update, Task 7 README + cleanup (RAGAS runner needed no change), Task 8 baseline run.
+
+**Baseline (k=6, full corpus, no RBAC filter — `benchmark compare`):**
+
+| strategy | recall | precision | hit | mrr |
+|---|---|---|---|---|
+| vector | 0.96 | 0.46 | 1.00 | 0.90 |
+| bm25 | 0.91 | 0.37 | 0.93 | 0.82 |
+| **hybrid** | **0.96** | 0.45 | 0.98 | **0.92** |
+
+- **Hybrid wins** (best mrr, strong recall). bm25 weakest.
+- **Weakest corner = `cross_doc` recall** (needs 2+ docs): vector 0.62 / bm25 0.75 / hybrid 0.88. Hybrid rescues but still lowest bucket — **the leak to chase in tuning.**
+- **`vocab_gap` is fine** (vector 1.00, hybrid 0.91) — paraphrase recall not the feared problem; RRF lets bm25's keyword-miss drag hybrid ~0.09.
+- **`tabular` strong** (recall 1.00, precision 0.67 — highest-precision corner).
+- Precision ~0.45 everywhere is expected (k=6, mostly single expected doc → 5/6 chunks "noise" by construction); not actionable alone.
+
+**Next (eval-gated, measure-first):** cross-encoder reranker, cross_doc recall lift, router contextual-compression. Baseline report under `backend/eval/results/` (gitignored).
 
 **Decisions locked:** document-level scoring (match on chunk `metadata["source"]`,
 exact equality), hand-authored ~24-question dataset against the real 30-doc corpus,
@@ -150,8 +182,8 @@ Layered prompt-injection defense + an authorization audit:
 | 1 | Auth + RBAC + region | ✅ | bcrypt + JWT, `get_current_user`/`require_role`, `/auth/login`, `/auth/me` (id+role+region), HR-gated `/admin/reindex`. **3-tier RBAC** (`tiers_for_role`: employee→all, manager→all+manager, HR→all+manager+hr_only) enforced as a single app-layer **retriever partition** (security invariant unit-tested). **Region filter** (global + home region) + **superseded** exclusion as Chroma filters. Graceful **confidential message** when only restricted docs match. Specs: `2026-06-24`, `2026-06-25`. |
 | 2 | Security & resilience | ✅ | SQL injection already safe (parameterized — invariant). **Done:** per-user/IP rate limiting (slowapi), LLM retry/backoff, context truncation, CORS lockdown + `/auth/refresh` CSRF (now exact-Origin). **Now also done (hardening pass):** layered prompt-injection defense (section-0 rules + per-request nonced context fence + integrity preamble on meta/chitchat/summary), **session object-auth/IDOR fix** (`test_idor.py`), upload caps (`MAX_UPLOAD_BYTES`, overwrite-409, `RATE_LIMIT_ADMIN`), **rate-limit key fix** (per-`sub` not per-token; `/auth/refresh`+`/auth/logout` limited — closes the refresh-then-spam bypass; `test_ratelimit.py`). **Deferred (step 8):** shared-store limiter for multi-instance, short-TTL/deny-list for instant revocation; RPM/RPD budgeting. |
 | 3 | User preferences | ✅ | `user_preferences` table; `GET/PUT /me/preferences`; tone/length/language **folded into the system prompt** (not a trailing history turn — that was under-weighted, so language/length appeared ignored), best-effort (a prefs DB hiccup never breaks a chat). Regional English variants normalized to the default so a length-only change emits no redundant language directive. |
-| 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Eval rebuild IN PROGRESS** (specs/plans `2026-06-29-eval-rebuild*`): old harness was stale (single-doc handbook); rebuild is document-level, `doc_precision@k` headline, RAGAS isolated. **Tasks 1–3 done/committed** (metrics, dataset loader+validation, **43-Q** hand-authored dataset); **resume at Task 4** (benchmark→answers→run_eval→README→baseline). **Pending after baseline:** cross-encoder reranker, vocabulary-gap recall, router contextual-compression — all eval-gated. |
-| 5 | Observability | 🔄 | **Done:** standardized response envelope (`answer`/`sources[document_id,file,section,source_type]`/`latency_ms`/`session_id`/`status`) + uniform error body. **Pending:** per-query telemetry log; monitoring metrics (P95/P99, no-answer rate, LLM-failure rate, cost/query). |
+| 4 | Retrieval quality inspection | 🔄 | **Done:** overview-chunk demotion, markdown list-item chunk fix, config `RETRIEVAL_MAX_DISTANCE`, corpus number-consistency pass (PTO bands, severance). **Eval rebuild ✅ COMPLETE** (specs/plans `2026-06-29-eval-rebuild*`): document-level harness, `doc_precision@k` headline, RAGAS isolated. All 8 tasks committed (metrics, dataset loader+validation, 43-Q dataset, benchmark, answers/run_eval schema fix, README, **baseline run**); 119 tests green. **Baseline:** hybrid wins (recall 0.96, mrr 0.92); weakest corner is `cross_doc` recall (hybrid 0.88, vector 0.62); `vocab_gap` fine, `tabular` strong. **Pending (eval-gated, measure-first):** cross-encoder reranker, cross_doc recall lift, router contextual-compression. |
+| 5 | Observability | 🔄 | **Done:** standardized response envelope (`answer`/`sources[document_id,file,section,source_type]`/`latency_ms`/`session_id`/`status`) + uniform error body. Per-call **LLM span** telemetry (`core/trace.py` + `_invoke` funnel: purpose, small/large model, tokens, latency, cost, status) + one **request_trace** rollup per message (query, classification, retrieval ids+scores, status, latency), correlated by `trace_id`, JSON to stdout (Cloud Logging-ready), `TELEMETRY_ENABLED` kill switch. **Pending:** metrics aggregation (P95/P99, no-answer/LLM-failure rate, cost/query) + OTel span export — both read this stream. Spec/plan `2026-06-30-observability-tracing*`. |
 | 6 | Admin document lifecycle | ✅ | `POST /admin/documents/upload` (multipart, background ingest), `GET /admin/documents` (+status), `GET …/{id}/status`, `DELETE …/{id}` (file + chunks), `POST /admin/reindex`. Per-doc `queued→processing→indexed→failed` in `document_status`. Upload accepts `access_tier`/`region`/`status` form fields written to a `.meta.yaml` sidecar, so HR can tier any format (csv/xlsx/pdf carry no inline frontmatter) from the portal; md/txt inline frontmatter still wins. **Deferred:** object storage (S3); ingestion stays synchronous-in-background for now. |
 | 7 | React frontend | 🔄 built | React + Vite + TanStack Query app (`frontend-react/`) consuming auth (login/refresh), chat with **SSE streaming**, session list (rename/inline-delete), preferences, and the HR document portal (upload/list/status/delete/reindex). Dark mode, per-response sources, department filter. Remaining polish tracked ad hoc. |
 | 7.5 | **Pre-deploy hardening** | ⏳ near-term | **DB connection pooling** — every query currently opens a fresh `psycopg.connect()` (`_connect()` in `chat_memory`/`preferences`/`users`/`tokens`/`doc_status`); under concurrency this exhausts Postgres connections + adds handshake latency. Add a pooled connection (`psycopg_pool` or pgbouncer) behind the existing `_connect()` seam — a real concurrency bug even pre-deploy, cheap to fix. Pairs with managed Postgres (Cloud SQL/Supabase) at deploy. |
