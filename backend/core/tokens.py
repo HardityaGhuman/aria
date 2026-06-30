@@ -13,10 +13,7 @@ the same four functions later without changing callers.
 from dataclasses import dataclass
 from datetime import datetime
 
-# pyrefly: ignore [missing-import]
-import psycopg
-
-from backend.core.config import DATABASE_URL
+from backend.core import db
 
 
 @dataclass
@@ -25,13 +22,10 @@ class TokenError(Exception):
 
 
 def _connect():
-    try:
-        return psycopg.connect(DATABASE_URL)
-    except Exception as exc:
-        raise TokenError(
-            "Could not connect to PostgreSQL for refresh tokens. "
-            "Make sure DATABASE_URL points to a running PostgreSQL database."
-        ) from exc
+    return db.pooled(lambda: TokenError(
+        "Could not connect to PostgreSQL for refresh tokens. "
+        "Make sure DATABASE_URL points to a running PostgreSQL database."
+    ))
 
 
 def initialize_tokens_table() -> None:
