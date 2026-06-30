@@ -106,7 +106,7 @@ def generate_answers(dataset: list[dict] | None = None, n: int = DEFAULT_N,
             "answer": answer,
             "contexts": contexts,
             "ground_truth": item["ground_truth"],
-            "expected_sections": item["expected_sections"],
+            "query_type": item.get("query_type", "single_doc"),
             "difficulty": item.get("difficulty", "easy"),
             "answer_coverage": round(metrics.answer_coverage(answer, item["ground_truth"]), 3),
         })
