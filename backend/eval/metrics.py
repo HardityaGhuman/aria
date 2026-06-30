@@ -1,74 +1,69 @@
 """
 eval/metrics.py
 ---------------
-Reference-based evaluation metrics. Unlike the live LLM-as-judge (reference-free,
-lenient), these compare the pipeline's output against known-correct ground truth,
-so they can detect a retrieval miss.
+Document-level retrieval metrics for the offline harness. They compare the
+pipeline's retrieved documents against known-correct ground truth, so they
+detect a retrieval miss (unlike a reference-free LLM judge).
 
-Retrieval metrics operate on the ordered list of section names the retriever
-returned (the ``parent_section`` of each top-k chunk) versus the expected
-sections. Answer metrics compare the generated answer against the ground truth.
+The match unit is the document id = a chunk's ``metadata["source"]`` (a path
+relative to the docs root, e.g. ``time-and-leave/working-hours-and-pto.md``).
+Matching is EXACT equality — never substring — so lenient matching can't
+inflate the score.
+
+``retrieved_sources`` is the ordered (best-first) list of each top-k chunk's
+source, WITH duplicates (multiple chunks often share a document).
 """
 import re
 
 
-def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").lower().strip())
-
-
-def _section_matches(retrieved: str, expected: str) -> bool:
-    """Lenient section match: containment either way so "PTO" matches
-    "Paid time off (PTO)"."""
-    r, e = _norm(retrieved), _norm(expected)
-    if not r or not e:
-        return False
-    return e in r or r in e
-
-
-def _is_relevant(retrieved_section: str, expected_sections: list[str]) -> bool:
-    return any(_section_matches(retrieved_section, e) for e in expected_sections)
-
-
-# ── Retrieval metrics ────────────────────────────────────────────────
-def section_recall(retrieved_sections: list[str], expected_sections: list[str]) -> float:
-    """Fraction of expected sections that were retrieved (0–1)."""
-    if not expected_sections:
+# ── Retrieval metrics (document-level) ───────────────────────────────
+def doc_recall_at_k(retrieved_sources: list[str], expected_docs: list[str]) -> float:
+    """Fraction of expected documents that appear anywhere in the top-k (0–1)."""
+    if not expected_docs:
         return 1.0
-    hits = sum(
-        1 for e in expected_sections
-        if any(_section_matches(r, e) for r in retrieved_sections)
-    )
-    return hits / len(expected_sections)
+    retrieved_set = set(retrieved_sources)
+    found = sum(1 for d in expected_docs if d in retrieved_set)
+    return found / len(expected_docs)
 
 
-def hit_at_k(retrieved_sections: list[str], expected_sections: list[str]) -> float:
-    """1.0 if any expected section is in the top-k, else 0.0."""
-    return 1.0 if any(_is_relevant(r, expected_sections) for r in retrieved_sections) else 0.0
+def doc_precision_at_k(retrieved_sources: list[str], expected_docs: list[str]) -> float:
+    """Fraction of retrieved chunks that come from an expected document.
 
-
-def context_hit_rate(retrieved_sections: list[str], expected_sections: list[str]) -> float:
-    """Fraction of retrieved chunks that are from an expected section (focus)."""
-    if not retrieved_sections:
+    This is the 'noise' metric the document viewer cares about: how much of what
+    surfaced is actually relevant. Operates per chunk (with duplicates), so a
+    top-k full of one wrong document scores low."""
+    if not retrieved_sources:
         return 0.0
-    relevant = sum(1 for r in retrieved_sections if _is_relevant(r, expected_sections))
-    return relevant / len(retrieved_sections)
+    expected_set = set(expected_docs)
+    relevant = sum(1 for s in retrieved_sources if s in expected_set)
+    return relevant / len(retrieved_sources)
 
 
-def reciprocal_rank(retrieved_sections: list[str], expected_sections: list[str]) -> float:
-    """1/rank of the first relevant chunk (Mean Reciprocal Rank component)."""
-    for rank, section in enumerate(retrieved_sections, start=1):
-        if _is_relevant(section, expected_sections):
+def doc_hit_at_k(retrieved_sources: list[str], expected_docs: list[str]) -> float:
+    """1.0 if any expected document is in the top-k, else 0.0."""
+    expected_set = set(expected_docs)
+    return 1.0 if any(s in expected_set for s in retrieved_sources) else 0.0
+
+
+def doc_reciprocal_rank(retrieved_sources: list[str], expected_docs: list[str]) -> float:
+    """1/rank of the first chunk from an expected document (MRR component)."""
+    expected_set = set(expected_docs)
+    for rank, source in enumerate(retrieved_sources, start=1):
+        if source in expected_set:
             return 1.0 / rank
     return 0.0
 
 
-# ── Answer metric ────────────────────────────────────────────────────
+# ── Answer metric (cheap, deterministic sanity check) ────────────────
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower().strip())
+
+
 def answer_coverage(answer: str, ground_truth: str, min_term_length: int = 4) -> float:
     """Fraction of significant ground-truth terms present in the answer.
 
-    A crude keyword-overlap sanity check — not a substitute for RAGAS, but a
-    cheap, deterministic signal of whether the key facts made it into the answer.
-    """
+    A crude keyword-overlap signal — NOT a substitute for RAGAS, but a cheap,
+    deterministic pre-check of whether the key facts made it into the answer."""
     if not answer or not ground_truth:
         return 0.0
     answer_norm = _norm(answer)
