@@ -69,3 +69,21 @@ def test_validate_against_corpus_flags_unknown_id(tmp_path):
 
 def test_validate_against_corpus_clean_for_real_id():
     assert dataset.validate_against_corpus([_good_item()]) == []
+
+
+def test_real_dataset_loads_and_resolves_to_corpus():
+    # The shipped dataset must be structurally valid AND every expected document
+    # id must point at a real corpus file — no typos, no stale ids.
+    data = dataset.load_eval_dataset()
+    assert len(data) >= 20
+    assert dataset.validate_against_corpus(data) == []
+
+
+def test_real_dataset_covers_hard_query_types():
+    data = dataset.load_eval_dataset()
+    qtypes = [d["query_type"] for d in data]
+    assert qtypes.count("vocab_gap") >= 4
+    assert qtypes.count("cross_doc") >= 3
+    assert qtypes.count("tabular") >= 3
+    departments = {d["department"] for d in data}
+    assert departments >= {"hr", "finance", "it", "time-and-leave", "benefits", "legal-compliance", "people-career"}
