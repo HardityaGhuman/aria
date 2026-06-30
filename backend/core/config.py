@@ -40,6 +40,10 @@ RETRIEVAL_STRATEGY = os.getenv("RETRIEVAL_STRATEGY", "hybrid")
 # Rewrite the user's query (history-aware) before retrieval to resolve follow-ups.
 QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
 
+# Per-call LLM tracing + per-request rollup (offline observability). Default on;
+# set false to disable all telemetry emission (the request path is unchanged).
+TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
 # so tests and tooling can import config without a secret present. The server
