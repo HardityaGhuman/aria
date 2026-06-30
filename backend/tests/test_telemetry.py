@@ -63,3 +63,37 @@ def test_no_document_body_in_span(caplog, monkeypatch):
         llm._invoke("answer", model="big", messages=[{"role": "user", "content": secret}])
     trace.reset_trace(token)
     assert all(secret not in r.message for r in caplog.records)
+
+
+def test_stream_emits_answer_stream_span(caplog, monkeypatch):
+    class _StreamUsage:
+        prompt_tokens = 900
+        completion_tokens = 40
+        total_tokens = 940
+
+    class _Delta:
+        def __init__(self, content):
+            self.content = content
+
+    class _StreamChoice:
+        def __init__(self, content):
+            self.delta = _Delta(content)
+
+    class _Chunk:
+        def __init__(self, content=None, usage=None):
+            self.choices = [_StreamChoice(content)] if content is not None else []
+            self.usage = usage
+
+    fake_stream = [_Chunk("Full"), _Chunk("-time"), _Chunk(usage=_StreamUsage())]
+    monkeypatch.setattr(llm.litellm, "completion", lambda **kw: iter(fake_stream))
+
+    token = trace.start_trace(user_id=1, session_id="s")
+    with caplog.at_level(logging.INFO, logger="telemetry"):
+        out = "".join(llm.stream_llm_response("q", "ctx", history=[]))
+    trace.reset_trace(token)
+
+    assert out == "Full-time"
+    rec = json.loads(caplog.records[-1].message)
+    assert rec["purpose"] == "answer_stream"
+    assert rec["model_role"] == "large"
+    assert rec["total_tokens"] == 940

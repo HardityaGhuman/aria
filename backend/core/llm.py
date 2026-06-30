@@ -418,17 +418,36 @@ def stream_llm_response(
 
     messages = _build_messages(system_prompt, augmented_message, history)
 
+    t0 = time.perf_counter()
     response = litellm.completion(
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
         temperature=0,
         stream=True,
+        stream_options={"include_usage": True},
     )
-    for chunk in response:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+    usage = None
+    try:
+        for chunk in response:
+            # The terminal usage chunk (include_usage) carries usage and empty choices.
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+    except Exception as exc:
+        emit_span("answer_stream", MODEL_NAME,
+                  latency_ms=int((time.perf_counter() - t0) * 1000),
+                  status="error", error_type=type(exc).__name__)
+        raise
+    emit_span("answer_stream", MODEL_NAME,
+              latency_ms=int((time.perf_counter() - t0) * 1000),
+              prompt_tokens=getattr(usage, "prompt_tokens", None),
+              completion_tokens=getattr(usage, "completion_tokens", None),
+              total_tokens=getattr(usage, "total_tokens", None),
+              status="ok")
 
 
 def count_tokens(messages: list[dict]) -> int:
