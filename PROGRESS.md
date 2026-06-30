@@ -71,7 +71,24 @@ prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
 (`/chat/stream`), user-owned sessions (`SessionStore` seam, Redis-ready), a uniform
 error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
-### ▶ Eval rebuild (step 4) — ✅ COMPLETE (all 8 tasks)
+### ▶ NEXT SESSION — resume here (step 5 observability, tracing/logging — PLANNED, not built)
+
+**Planning complete; zero code written.** Brainstorm + spec + full TDD plan done
+this session. A fresh session executes the plan inline (`executing-plans`, no
+subagents).
+
+- Spec: `docs/superpowers/specs/2026-06-30-observability-tracing-design.md` (gitignored)
+- Plan: `docs/superpowers/plans/2026-06-30-observability-tracing.md` (gitignored) — top has an "⏸ EXECUTION STATUS" block; **start at Task 1**.
+- **What it builds:** deterministic LLM trace-back. `core/trace.py` (contextvar `trace_id`, propagates across `asyncio.to_thread`) + a single `_invoke()` funnel in `core/llm.py` wrapping all 7 `litellm.completion` calls → one JSON **span** each (purpose, **small-vs-large model**, exact tokens, latency, cost, status/error). `chat_service` emits one **request_trace** rollup/message (query, classification, retrieval ids+scores, status, latency). Join on `trace_id`. Sink = stdout JSON via a `telemetry` logger (Cloud Logging-ready). `TELEMETRY_ENABLED` kill switch. No new deps.
+- **Decisions locked (brainstorm):** sink = JSON logs (NOT LangSmith — app calls litellm not LangChain runnables, so LangSmith auto-traces nothing + ships policy text out); redaction = query + chunk ids + scores, **never doc body** (tested invariant); scope = spans + rollup only (OTel, metrics dashboard, DB table all deferred).
+- **5 tasks:** (1) trace.py + config flag + tests, (2) `_invoke` funnel + 5 non-stream calls + test_telemetry, (3) rewrite + streaming spans, (4) chat_service trace+rollup both paths + test, (5) regression(119+~13)+smoke+PROGRESS update. TDD, all code in the plan.
+- **Test cmd:** `JWT_SECRET=dummy venv/bin/python -m pytest …` (the `eval_venv` has no pytest — use `venv`).
+
+**Then:** metrics aggregation (P95/P99, rates, cost/query) reads this stream; then hosting (step 8). Order eval → observability → deploy.
+
+---
+
+### Eval rebuild (step 4) — ✅ COMPLETE (all 8 tasks)
 
 Eval rebuild **done** (inline `executing-plans`, branch `new-frontend`). All 8
 tasks committed; **119 backend tests green**.
