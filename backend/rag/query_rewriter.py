@@ -14,6 +14,7 @@ import litellm
 
 from backend.core.config import LLM_TIMEOUT_SECONDS, ROUTER_MODEL_NAME
 from backend.core.logging import get_logger
+from backend.core.trace import emit_span
 
 logger = get_logger(__name__)
 
@@ -66,15 +67,30 @@ def rewrite_query(message: str, history: list[dict] | None = None) -> str:
     """Return a standalone search query, or the original message on any failure."""
     try:
         prompt = _TEMPLATE.format(history=_format_history(history), message=message)
-        response = litellm.completion(
-            model=ROUTER_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            timeout=LLM_TIMEOUT_SECONDS,
-            temperature=0,
-        )
+        import time as _time
+        _t0 = _time.perf_counter()
+        try:
+            response = litellm.completion(
+                model=ROUTER_MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                timeout=LLM_TIMEOUT_SECONDS,
+                temperature=0,
+            )
+        except Exception as _exc:
+            emit_span("rewrite", ROUTER_MODEL_NAME,
+                      latency_ms=int((_time.perf_counter() - _t0) * 1000),
+                      status="error", error_type=type(_exc).__name__)
+            raise
+        _usage = getattr(response, "usage", None)
+        emit_span("rewrite", ROUTER_MODEL_NAME,
+                  latency_ms=int((_time.perf_counter() - _t0) * 1000),
+                  prompt_tokens=getattr(_usage, "prompt_tokens", None),
+                  completion_tokens=getattr(_usage, "completion_tokens", None),
+                  total_tokens=getattr(_usage, "total_tokens", None),
+                  status="ok")
         rewritten = (response.choices[0].message.content or "").strip().strip('"').strip()
         if not rewritten or len(rewritten) > _MAX_REWRITE_CHARS:
             return message
