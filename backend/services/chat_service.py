@@ -25,6 +25,7 @@ from backend.core.config import (
     LLM_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
+    RETRIEVAL_STRATEGY,
 )
 from backend.core.llm import (
     classify_query,
@@ -42,6 +43,7 @@ from backend.core.preferences import (
     format_preferences,
     get_preferences,
 )
+from backend.core.trace import emit_request_trace, reset_trace, start_trace
 from backend.rag import retrieve_context, rewrite_query
 
 logger = get_logger(__name__)
@@ -242,71 +244,92 @@ async def generate_chat_reply(
     ``allowed_regions`` restricts retrieval to globally-visible docs and the
     caller's home region. The route derives it from the user's region claim.
     """
-    if not message.strip():
-        # Uniform envelope (matches the streaming path) so the client sees one
-        # error shape everywhere.
-        raise AppError("validation_error", "Message cannot be empty.", status_code=422)
-
-    formatted_history = _prepare_history(session_id)
-
-    # Classify before retrieval so meta and out-of-scope queries skip RAG.
-    classification = await _run_blocking(
-        classify_query,
-        message,
-        formatted_history,
-        timeout_detail="The language model timed out while classifying the request. Please try again.",
-    )
-
-    if classification == "out_of_scope":
-        result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
-    elif classification == "chitchat":
-        # Pass preferences (language) so a greeting honors the same language as
-        # policy/meta answers — otherwise the language setting appears to apply at
-        # random because only some routes respected it.
-        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
-        reply = await _run_blocking(
-            get_chitchat_response,
-            message,
-            pref_note,
-            timeout_detail="The language model timed out. Please try again.",
-        )
-        result = ChatResult(reply, "", [], status="ok")
-    elif classification == "meta":
-        # Preferences shape the answer, not the routing — fold into the system
-        # prompt (not history) so the length/tone/language directive carries weight.
-        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
-        reply = await _run_blocking(
-            get_meta_response,
-            timeout_detail="The language model timed out while generating a response. Please try again.",
-            user_message=message,
-            history=formatted_history,
-            preferences=pref_note,
-        )
-        result = ChatResult(reply, "", [], status="ok")
-    else:
-        pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
-        result = await _answer_policy_query(
-            message, formatted_history, allowed_tiers, allowed_regions, preferences=pref_note
-        )
-
+    token = start_trace(owner_user_id, session_id)
+    started = time.perf_counter()
+    classification = ""
+    result = None
     try:
-        # Mirror the streaming path: persist citations only for a grounded answer,
-        # in the same Source shape the client receives.
-        persisted_sources = _source_dicts(result.sources) if result.status == "ok" else []
-        append_exchange(
-            session_id, message, result.reply,
-            owner_user_id=owner_user_id, sources=persisted_sources,
-        )
-    except ChatMemoryError as e:
-        raise HTTPException(status_code=503, detail=e.message)
+        if not message.strip():
+            # Uniform envelope (matches the streaming path) so the client sees one
+            # error shape everywhere.
+            raise AppError("validation_error", "Message cannot be empty.", status_code=422)
 
-    return result
+        formatted_history = _prepare_history(session_id)
+
+        # Classify before retrieval so meta and out-of-scope queries skip RAG.
+        classification = await _run_blocking(
+            classify_query,
+            message,
+            formatted_history,
+            timeout_detail="The language model timed out while classifying the request. Please try again.",
+        )
+
+        if classification == "out_of_scope":
+            result = ChatResult(REFUSAL_MESSAGE, "", [], status="refused")
+        elif classification == "chitchat":
+            # Pass preferences (language) so a greeting honors the same language as
+            # policy/meta answers — otherwise the language setting appears to apply at
+            # random because only some routes respected it.
+            pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+            reply = await _run_blocking(
+                get_chitchat_response,
+                message,
+                pref_note,
+                timeout_detail="The language model timed out. Please try again.",
+            )
+            result = ChatResult(reply, "", [], status="ok")
+        elif classification == "meta":
+            # Preferences shape the answer, not the routing — fold into the system
+            # prompt (not history) so the length/tone/language directive carries weight.
+            pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+            reply = await _run_blocking(
+                get_meta_response,
+                timeout_detail="The language model timed out while generating a response. Please try again.",
+                user_message=message,
+                history=formatted_history,
+                preferences=pref_note,
+            )
+            result = ChatResult(reply, "", [], status="ok")
+        else:
+            pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
+            result = await _answer_policy_query(
+                message, formatted_history, allowed_tiers, allowed_regions, preferences=pref_note
+            )
+
+        try:
+            # Mirror the streaming path: persist citations only for a grounded answer,
+            # in the same Source shape the client receives.
+            persisted_sources = _source_dicts(result.sources) if result.status == "ok" else []
+            append_exchange(
+                session_id, message, result.reply,
+                owner_user_id=owner_user_id, sources=persisted_sources,
+            )
+        except ChatMemoryError as e:
+            raise HTTPException(status_code=503, detail=e.message)
+
+        return result
+    finally:
+        emit_request_trace(
+            query=message,
+            classification=classification,
+            strategy=RETRIEVAL_STRATEGY,
+            retrieved=_retrieved_meta(result.sources) if result else [],
+            status=result.status if result else "error",
+            total_latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        reset_trace(token)
 
 
 # --- SSE streaming ---
 
 # Marks the end of the synchronous LLM token generator when pulled across threads.
 _STREAM_DONE = object()
+
+
+def _retrieved_meta(sources: list[dict]) -> list[dict]:
+    """Doc id + similarity score per retrieved chunk, for the request rollup.
+    Never includes document text — ids and scores only."""
+    return [{"doc_id": s.get("source", ""), "score": s.get("distance")} for s in sources]
 
 
 def _source_dicts(raw_sources: list[dict]) -> list[dict]:
@@ -372,7 +395,11 @@ async def stream_chat_reply(
     Graceful non-answers (refused/blocked/no_results) emit a single ``done`` with
     that status and NO token events.
     """
+    token = start_trace(owner_user_id, session_id)
     started = time.perf_counter()
+    final_status = "error"
+    classification = ""
+    retrieved_meta: list[dict] = []
 
     def _envelope(answer: str, sources: list[dict], status: str) -> dict:
         return {
@@ -394,6 +421,7 @@ async def stream_chat_reply(
         classification = await asyncio.to_thread(classify_query, message, formatted_history)
 
         if classification == "out_of_scope":
+            final_status = "refused"
             yield {"event": "done", "data": _envelope(REFUSAL_MESSAGE, [], "refused")}
             await _persist_quietly(session_id, message, REFUSAL_MESSAGE, owner_user_id)
             return
@@ -401,6 +429,7 @@ async def stream_chat_reply(
         if classification == "chitchat":
             pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
             answer = await asyncio.to_thread(get_chitchat_response, message, pref_note)
+            final_status = "ok"
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}
@@ -413,6 +442,7 @@ async def stream_chat_reply(
 
         if classification == "meta":
             answer = await asyncio.to_thread(get_meta_response, message, formatted_history, pref_note)
+            final_status = "ok"
             yield {"event": "token", "data": {"delta": answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], "ok")}
@@ -425,8 +455,10 @@ async def stream_chat_reply(
             retrieve_context, search_query,
             allowed_tiers=allowed_tiers, allowed_regions=allowed_regions,
         )
+        retrieved_meta = _retrieved_meta(retrieved.sources)
 
         if retrieved.status == "blocked":
+            final_status = "blocked"
             contact = retrieved.blocked_contact or "HR"
             answer = CONFIDENTIAL_MESSAGE.format(contact=contact)
             yield {"event": "done", "data": _envelope(answer, [], "blocked")}
@@ -434,6 +466,7 @@ async def stream_chat_reply(
             return
 
         if not retrieved.sources:
+            final_status = "no_results"
             yield {"event": "done", "data": _envelope(NO_RESULTS_MESSAGE, [], "no_results")}
             await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
@@ -452,12 +485,15 @@ async def stream_chat_reply(
         # its sources and reports the matching status.
         final_sources: list[dict] = []
         if _is_refusal(full_answer):
+            final_status = "refused"
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "refused")}
         elif _is_insufficient_policy_answer(full_answer):
+            final_status = "no_results"
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
         else:
+            final_status = "ok"
             final_sources = _source_dicts(retrieved.sources)
             yield {"event": "sources", "data": {"sources": final_sources}}
             yield {"event": "done", "data": _envelope(full_answer, final_sources, "ok")}
@@ -469,3 +505,13 @@ async def stream_chat_reply(
         yield {"event": "error", "data": {
             "code": "internal_error", "message": "An unexpected error occurred.", "detail": None,
         }}
+    finally:
+        emit_request_trace(
+            query=message,
+            classification=classification,
+            strategy=RETRIEVAL_STRATEGY,
+            retrieved=retrieved_meta,
+            status=final_status,
+            total_latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        reset_trace(token)

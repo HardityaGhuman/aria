@@ -16,6 +16,7 @@ from backend.core.config import (
 )
 from backend.core.errors import AppError
 from backend.core.logging import get_logger
+from backend.core.trace import emit_span
 
 logger = get_logger(__name__)
 
@@ -77,6 +78,39 @@ def call_with_retry(fn, *args, retries: int = None, base_delay: float = None, **
                     status_code=502,
                 ) from exc
             time.sleep(base_delay * (2 ** (attempt - 1)))
+
+
+def _invoke(purpose: str, model: str, **kwargs):
+    """Single funnel for non-streaming litellm.completion calls. Emits one span
+    (ok or error) carrying model, tokens, latency, and cost, then returns the
+    response. Re-raises on failure so call_with_retry / AppError handling upstream
+    is unchanged — each attempt is its own span."""
+    t0 = time.perf_counter()
+    try:
+        response = litellm.completion(model=model, **kwargs)
+    except Exception as exc:
+        emit_span(
+            purpose, model,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            status="error", error_type=type(exc).__name__,
+        )
+        raise
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    usage = getattr(response, "usage", None)
+    try:
+        cost = litellm.completion_cost(completion_response=response)
+    except Exception:
+        cost = None
+    emit_span(
+        purpose, model,
+        latency_ms=latency_ms,
+        prompt_tokens=getattr(usage, "prompt_tokens", None),
+        completion_tokens=getattr(usage, "completion_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+        cost_usd=cost,
+        status="ok",
+    )
+    return response
 
 
 def truncate_to_token_budget(text: str, max_tokens: int = None) -> str:
@@ -200,7 +234,8 @@ Latest query:
         "You are a precise routing classifier for a company policy assistant.",
         classification_prompt,
     )
-    response = litellm.completion(
+    response = _invoke(
+        "classify",
         model=ROUTER_MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
@@ -243,7 +278,8 @@ User said:
         _INTEGRITY_PREAMBLE + "\n\nYou are Aria, a warm and personable internal company assistant.",
         prompt,
     )
-    response = litellm.completion(
+    response = _invoke(
+        "chitchat",
         model=ROUTER_MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
@@ -280,7 +316,8 @@ User question:
     if preferences:
         system += f"\n\n{preferences}"
     messages = _build_messages(system, prompt, history)
-    response = litellm.completion(
+    response = _invoke(
+        "meta",
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
@@ -356,7 +393,8 @@ def get_llm_response(
     messages = _build_messages(system_prompt, augmented_message, history)
 
     response = call_with_retry(
-        litellm.completion,
+        _invoke,
+        "answer",
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
@@ -380,17 +418,36 @@ def stream_llm_response(
 
     messages = _build_messages(system_prompt, augmented_message, history)
 
+    t0 = time.perf_counter()
     response = litellm.completion(
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
         temperature=0,
         stream=True,
+        stream_options={"include_usage": True},
     )
-    for chunk in response:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+    usage = None
+    try:
+        for chunk in response:
+            # The terminal usage chunk (include_usage) carries usage and empty choices.
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+    except Exception as exc:
+        emit_span("answer_stream", MODEL_NAME,
+                  latency_ms=int((time.perf_counter() - t0) * 1000),
+                  status="error", error_type=type(exc).__name__)
+        raise
+    emit_span("answer_stream", MODEL_NAME,
+              latency_ms=int((time.perf_counter() - t0) * 1000),
+              prompt_tokens=getattr(usage, "prompt_tokens", None),
+              completion_tokens=getattr(usage, "completion_tokens", None),
+              total_tokens=getattr(usage, "total_tokens", None),
+              status="ok")
 
 
 def count_tokens(messages: list[dict]) -> int:
@@ -439,7 +496,8 @@ New exchange to incorporate:
             _INTEGRITY_PREAMBLE + "\n\nYou summarize internal policy assistant conversations.",
             summary_prompt,
         )
-        response = litellm.completion(
+        response = _invoke(
+            "summarize",
             model=MODEL_NAME,
             messages=messages,
             timeout=LLM_TIMEOUT_SECONDS,
