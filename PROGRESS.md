@@ -64,27 +64,32 @@ Each piece is designed → built → understood fully before the next.
 [12] Drive auto-ingest ........... ⏳  (HR folder → webhook → upload)
 ```
 
-**You are here:** steps 0–3 + 6 complete; 4 + 5 partially landed; **step 7 React
-frontend is built** (chat with SSE streaming, session list, preferences, HR
-document portal, dark mode). A **backend-standardization pass** shipped the React
-prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
+**You are here:** steps 0–3 + 6 complete; step 4 partially landed (eval rebuild done,
+reranker pending); **step 5 tracing/logging done** (only metrics aggregation pending);
+**step 7 React frontend is built** (chat with SSE streaming, session list, preferences,
+HR document portal, dark mode); **step 10 agentic layer designed, not built** (next
+focus). A **backend-standardization pass** shipped the React prerequisites: refresh-token rotation + HttpOnly cookie, SSE streaming
 (`/chat/stream`), user-owned sessions (`SessionStore` seam, Redis-ready), a uniform
 error envelope, and a **frozen OpenAPI** (`docs/api/openapi.json`).
 
-### ▶ NEXT SESSION — resume here (step 5 observability, tracing/logging — PLANNED, not built)
+### ▶ NEXT SESSION — resume here (step 10 agentic layer — DESIGNED, not built)
 
-**Planning complete; zero code written.** Brainstorm + spec + full TDD plan done
-this session. A fresh session executes the plan inline (`executing-plans`, no
-subagents).
+**Step 5 observability tracing/logging is DONE** (shipped 2026-06-30: `core/trace.py`
++ `_invoke` funnel + `request_trace` rollup, 131 backend tests green, smoke-verified).
+Only metrics aggregation remains pending under step 5.
 
-- Spec: `docs/superpowers/specs/2026-06-30-observability-tracing-design.md` (gitignored)
-- Plan: `docs/superpowers/plans/2026-06-30-observability-tracing.md` (gitignored) — top has an "⏸ EXECUTION STATUS" block; **start at Task 1**.
-- **What it builds:** deterministic LLM trace-back. `core/trace.py` (contextvar `trace_id`, propagates across `asyncio.to_thread`) + a single `_invoke()` funnel in `core/llm.py` wrapping all 7 `litellm.completion` calls → one JSON **span** each (purpose, **small-vs-large model**, exact tokens, latency, cost, status/error). `chat_service` emits one **request_trace** rollup/message (query, classification, retrieval ids+scores, status, latency). Join on `trace_id`. Sink = stdout JSON via a `telemetry` logger (Cloud Logging-ready). `TELEMETRY_ENABLED` kill switch. No new deps.
-- **Decisions locked (brainstorm):** sink = JSON logs (NOT LangSmith — app calls litellm not LangChain runnables, so LangSmith auto-traces nothing + ships policy text out); redaction = query + chunk ids + scores, **never doc body** (tested invariant); scope = spans + rollup only (OTel, metrics dashboard, DB table all deferred).
-- **5 tasks:** (1) trace.py + config flag + tests, (2) `_invoke` funnel + 5 non-stream calls + test_telemetry, (3) rewrite + streaming spans, (4) chat_service trace+rollup both paths + test, (5) regression(119+~13)+smoke+PROGRESS update. TDD, all code in the plan.
+**Agentic layer is fully designed; zero code written.** Brainstorm + two specs +
+the model-allocation/LangGraph decision done. A fresh session starts building
+inline (`writing-plans` → `executing-plans`, no subagents, /caveman full).
+
+- Architecture spec: `docs/superpowers/specs/2026-06-26-agentic-tools-integrations-design.md` (gitignored) — agent loop, threat model, security controls, tiers.
+- Pre-setup + model-allocation spec: `docs/superpowers/specs/2026-06-30-agentic-presetup-model-allocation-design.md` (gitignored) — resolves which model picks tools + LangGraph + provisioning checklist.
+- **Decisions locked:** new `action` intent → no-RAG lane; **70B selects tools on every lane in v1** (hybrid already wakes 70B); validity from **native function-calling + strict JSON schemas + validate-or-repair** (unvalidated call never executes), not model size; Tier-1 reads move to 8B (`AGENT_READ_MODEL`) only after measured tool-pick accuracy; **NO LangGraph** (hand-rolled bounded loop, no `langchain-core` re-coupling); gated behind `AGENT_TOOLS_ENABLED`.
+- **Build sequence:** (1) loop scaffold + `core/tools/registry.py` + `Principal` + ALL security invariants (stub tool, 70B) → (2) Tier-1 reads (leave-balance + holidays) THEN measure 8B → (3) Slack front-door → (4) Tier-2 writes (book-leave, confirmation-gated, always 70B) → (5) Tier-3 Drive auto-ingest. Each its own spec→plan→execute.
+- **Next action:** invoke `superpowers:writing-plans` on **sub-step 1** (loop scaffold + registry + Principal + security invariants). Pre-setup (GCP service account, mock-HRIS sheet, Slack app) needed before Tier-1, NOT before the scaffold.
 - **Test cmd:** `JWT_SECRET=dummy venv/bin/python -m pytest …` (the `eval_venv` has no pytest — use `venv`).
 
-**Then:** metrics aggregation (P95/P99, rates, cost/query) reads this stream; then hosting (step 8). Order eval → observability → deploy.
+**Then:** step 5 metrics aggregation (P95/P99, rates, cost/query) reads the telemetry stream; hosting (step 8) is confirmed NOT a blocker to agentic (localhost-buildable).
 
 ---
 
@@ -127,12 +132,14 @@ dataset (I draft from the corpus, you review); Task 8 = run the baseline (needs
 `python -m backend.index_documents` first). Out of scope until *after* the
 baseline: reranker, chunking, retrieval tuning — measure first.
 
-**Then (later sessions):** logging/tracing observability (step 5), then hosting
-(step 8 — confirmed *not* a blocker to agentic features, which are localhost-buildable).
+**Then (done since):** logging/tracing observability (step 5) ✅ shipped. Hosting
+(step 8) confirmed *not* a blocker to agentic features (localhost-buildable), so
+**next focus is step 10 — the agentic layer** (designed; see the NEXT SESSION block
+above). Hosting follows.
 
-A **security-hardening pass** then closed step 2's deferred items and an audit's
-findings (see *Security hardening* below). **All 98 backend tests pass.** Next
-planned focus: **step 8 — pgvector + Cloud Run**.
+A **security-hardening pass** earlier closed step 2's deferred items and an audit's
+findings (see *Security hardening* below). **All 131 backend tests pass** (after the
+step-5 tracing work).
 
 ---
 
@@ -241,10 +248,14 @@ Full detail lives in `CLAUDE.md → Forward Requirements`.
 
 ## Immediate next actions
 
-1. **Step 7 polish** (frontend is built): tighten remaining UX, then freeze.
-2. Begin **step 8 — pgvector + Cloud Run**: the serverless cutover (move vectors
-   off local Chroma, rebuild BM25, decide API embeddings vs `min-instances=1`).
-3. For local dev set `COOKIE_SECURE=false` so the refresh cookie is sent over
+1. **Step 10 — agentic layer** (designed, next focus): invoke `writing-plans` on
+   sub-step 1 (loop scaffold + `core/tools/registry.py` + `Principal` + security
+   invariants, stub tool, 70B). Specs `2026-06-26` + `2026-06-30-agentic-presetup-model-allocation`.
+2. **Step 5 metrics aggregation** (telemetry stream is live): avg/P95/P99 latency,
+   no-answer rate, LLM-failure rate, cost/query — reads the `request_trace`/`llm_span` JSON.
+3. **Step 8 — pgvector + Cloud Run** (hosting; not a blocker to agentic): move
+   vectors off local Chroma, rebuild BM25, decide API embeddings vs `min-instances=1`.
+4. For local dev set `COOKIE_SECURE=false` so the refresh cookie is sent over
    `http://localhost` (it is `Secure` by default for prod).
-4. Re-run `scripts/export_openapi.py` whenever a route or model changes so the
+5. Re-run `scripts/export_openapi.py` whenever a route or model changes so the
    frozen contract stays in sync.
