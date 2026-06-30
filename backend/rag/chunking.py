@@ -19,7 +19,7 @@ from backend.rag.loaders import clean_text
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 100
 # Bump to force a one-time reindex when chunking logic changes.
-CHUNK_VERSION = "2026-06-25-rbac-quality-v10"
+CHUNK_VERSION = "2026-06-30-h2-only-split-v11"
 # Sections shorter than this are treated as heading/intro blurbs ("In this
 # section we explain...") and folded forward into the next real section, so they
 # don't survive as low-content chunks that win retrieval slots without payload.
@@ -79,11 +79,16 @@ def _is_heading(line: str, toc_titles: set[str], md_mode: bool) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    # Markdown docs: only H2+ (##) are section boundaries. The H1 title stays in
-    # the leading block (tagged "overview"), and numbered list items ("1. ...")
-    # are never treated as headings — that is what kept fragmenting lists.
+    # Markdown docs: ONLY H2 (##) is a section boundary. The H1 title stays in
+    # the leading block (tagged "overview"), numbered list items ("1. ...") are
+    # never headings, and H3+ (### subsections) stay welded to their parent H2.
+    # H3-splitting shattered tightly-coupled enumerations — e.g. a "## 4-Stage
+    # Interview Loop" section whose four "### Stage N" subparts became separate
+    # sibling chunks, so a "what are the stages" query retrieved some siblings
+    # but not all and TOP_K cut the rest. Keeping the H2 whole makes the whole
+    # enumeration one retrievable unit. (No corpus doc uses H3 without an H2.)
     if md_mode:
-        return _heading_level(stripped) >= 2
+        return _heading_level(stripped) == 2
     # Non-markdown (PDF) docs: fall back to TOC titles + structured prefixes
     # (Roman/decimal/lettered), which is where the numbered-prefix heuristic
     # legitimately applies.
