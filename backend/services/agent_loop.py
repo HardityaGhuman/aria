@@ -48,6 +48,7 @@ def run_agent_loop(
     max_steps: int | None = None,
     confirmed: bool = False,
     select_fn=None,
+    gather_only: bool = False,
 ) -> AgentOutcome:
     max_steps = MAX_TOOL_STEPS if max_steps is None else max_steps
     select_fn = select_fn or _default_select_fn()
@@ -59,6 +60,8 @@ def run_agent_loop(
         selection = select_fn(working_message, specs, history)
 
         if not selection.calls:
+            if gather_only:
+                return AgentOutcome(status="gathered", answer=None, tool_results=tool_results)
             return AgentOutcome(status="answer", answer=selection.text, tool_results=tool_results)
 
         call = selection.calls[0]
