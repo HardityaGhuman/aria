@@ -624,6 +624,7 @@ async def stream_chat_reply(
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
     owner_user_id: int | None = None,
+    principal: Principal | None = None,
 ):
     """Async generator yielding typed SSE events for the chat flow.
 
@@ -729,6 +730,22 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
             return
 
+        # Tool-aware fusion (streaming): gather read-tool results, emit the reserved
+        # tool events, then fold the live number into the streamed grounded answer.
+        # Flag off / no principal ⇒ tool_note is None and this is today's path.
+        tool_note = None
+        if AGENT_TOOLS_ENABLED and principal is not None and _REGISTRY.specs_for(principal):
+            outcome = await asyncio.to_thread(
+                lambda: run_agent_loop(
+                    message, formatted_history, principal, _REGISTRY, gather_only=True
+                )
+            )
+            for entry in outcome.tool_results:
+                yield {"event": "tool_call", "data": {"name": entry["name"]}}
+                yield {"event": "tool_result", "data": {
+                    "name": entry["name"], "status": entry["result"].status}}
+            tool_note = _tool_results_directive(outcome.tool_results)
+
         # Same re-explain handling as the sync path: vary the reply when the user
         # asked to rephrase the previous answer, so streaming doesn't re-emit it verbatim.
         extra_directive = None
@@ -736,6 +753,9 @@ async def stream_chat_reply(
         if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
             extra_directive = _REEXPLAIN_DIRECTIVE
             temperature = _REEXPLAIN_TEMPERATURE
+
+        # Prepend the trusted tool note so the live number reaches the model.
+        extra_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
 
         token_iter = stream_llm_response(
             message, retrieved.text, formatted_history, pref_note,
