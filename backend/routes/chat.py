@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from backend.core.auth import get_current_user, regions_for_user, tiers_for_role
+from backend.core.tools.principal import principal_from_user
 from backend.core.config import RATE_LIMIT_CHAT
 from backend.core.ratelimit import limiter
 from backend.core.chat_memory import (
@@ -93,6 +94,7 @@ async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_curr
         allowed_tiers=tiers_for_role(user["role"]),
         allowed_regions=regions_for_user(user["region"]),
         owner_user_id=user["id"],
+        principal=principal_from_user(user),
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
     return ChatResponse(
@@ -122,6 +124,7 @@ async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(g
             allowed_tiers=tiers_for_role(user["role"]),
             allowed_regions=regions_for_user(user["region"]),
             owner_user_id=user["id"],
+            principal=principal_from_user(user),
         ):
             yield {"event": event["event"], "data": json.dumps(event["data"])}
 
