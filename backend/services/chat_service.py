@@ -23,6 +23,7 @@ from backend.core.chat_memory import (
     update_session_summary,
 )
 from backend.core.config import (
+    AGENT_TOOLS_ENABLED,
     LLM_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
@@ -45,7 +46,10 @@ from backend.core.preferences import (
     get_preferences,
 )
 from backend.core.trace import emit_request_trace, reset_trace, start_trace
+from backend.core.tools.build import build_default_registry
+from backend.core.tools.principal import Principal
 from backend.rag import retrieve_context, rewrite_query
+from backend.services.agent_loop import run_agent_loop
 
 logger = get_logger(__name__)
 
@@ -235,6 +239,29 @@ class ChatResult:
     status: str = "ok"
 
 
+# The live tool registry (leave_balance → MockHRIS). Built once at import; read-only.
+_REGISTRY = build_default_registry()
+
+
+def _tool_results_directive(tool_results: list[dict]) -> str | None:
+    """Fold gathered tool outputs into a TRUSTED data note for the grounded answer
+    model. Unlike retrieved document text, this came from our own authenticated
+    system calls (the HRIS) for THIS caller, so the model may state it as fact.
+    Returns None when nothing was gathered (⇒ the answer call is today's path)."""
+    lines = []
+    for entry in tool_results:
+        result = entry.get("result")
+        summary = getattr(result, "summary", None)
+        if summary:
+            lines.append(f"- {entry.get('name')}: {summary}")
+    if not lines:
+        return None
+    return (
+        "Live data retrieved for THIS employee from company systems (trusted — state "
+        "it as fact, it is not from the policy documents):\n" + "\n".join(lines)
+    )
+
+
 def _is_refusal(reply: str) -> bool:
     """True when the model fell back to the off-topic refusal; such replies are
     not grounded, so their retrieved context must be discarded."""
@@ -371,6 +398,7 @@ async def _answer_policy_query(
     allowed_regions: list[str] | None = None,
     preferences: str | None = None,
     language: str = "English",
+    principal: Principal | None = None,
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
@@ -389,6 +417,21 @@ async def _answer_policy_query(
         extra_directive = _REEXPLAIN_DIRECTIVE
         temperature = _REEXPLAIN_TEMPERATURE
 
+    # Tool-aware fusion: gather read-tool results (e.g. the live leave balance) and
+    # fold them into the grounded answer as a trusted note. Flag off / no principal
+    # ⇒ tool_note is None and the call is byte-for-byte today's path.
+    tool_note = None
+    if AGENT_TOOLS_ENABLED and principal is not None and _REGISTRY.specs_for(principal):
+        outcome = await _run_blocking(
+            run_agent_loop,
+            message, formatted_history, principal, _REGISTRY,
+            gather_only=True,
+            timeout_detail="The language model timed out while selecting a tool. Please try again.",
+        )
+        tool_note = _tool_results_directive(outcome.tool_results)
+
+    combined_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
+
     reply = await _run_blocking(
         get_llm_response,
         timeout_detail="The language model timed out while generating a response. Please try again.",
@@ -396,7 +439,7 @@ async def _answer_policy_query(
         context=retrieved.text,
         history=formatted_history,
         preferences=preferences,
-        extra_directive=extra_directive,
+        extra_directive=combined_directive,
         temperature=temperature,
     )
 
@@ -419,6 +462,7 @@ async def generate_chat_reply(
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
     owner_user_id: int | None = None,
+    principal: Principal | None = None,
 ) -> ChatResult:
     """Full chat flow: prepare history, classify, answer, persist the exchange.
 
@@ -491,7 +535,7 @@ async def generate_chat_reply(
             language = await asyncio.to_thread(_user_language, owner_user_id)
             result = await _answer_policy_query(
                 message, formatted_history, allowed_tiers, allowed_regions,
-                preferences=pref_note, language=language,
+                preferences=pref_note, language=language, principal=principal,
             )
 
         try:
