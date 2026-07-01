@@ -44,6 +44,15 @@ QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "t
 # set false to disable all telemetry emission (the request path is unchanged).
 TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
+# --- Agentic tool layer (Phase A) ---
+# Master rollback switch. false ⇒ the pipeline is pure-RAG, identical to today.
+AGENT_TOOLS_ENABLED = os.getenv("AGENT_TOOLS_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# Hard cap on agent-loop iterations — bounds cost/latency and a tool-call storm.
+MAX_TOOL_STEPS = int(os.getenv("MAX_TOOL_STEPS", "3"))
+# Model used to select/extract tool calls on the read lane. Defaults to the 70B
+# answer model (v1 rule); flip to the 8B ONLY after tool-pick accuracy is measured.
+AGENT_READ_MODEL = os.getenv("AGENT_READ_MODEL", MODEL_NAME)
+
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
 # so tests and tooling can import config without a secret present. The server
