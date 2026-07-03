@@ -199,10 +199,11 @@ def classify_query(user_message: str, history: list[dict]) -> str:
         if msg.get("content")
     ) or "No prior conversation."
     classification_prompt = f"""### 1. Task
-Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, meta, chitchat, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
+Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, hr, meta, chitchat, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
 
 ### 2. Labels
 - policy: the query needs the SUBSTANCE of a company rule, benefit, entitlement, procedure, handbook topic, or operational practice to answer, OR it asks for guidance on how to handle, report, or resolve a real workplace situation the company's policies govern — incidents, losses, errors, access problems, eligibility, requests, or entitlements. This holds regardless of grammatical person or phrasing: "what is the policy on X", "what do I do if Y happens", "how / who do I report Z to", and conversational, first-person, or situational wordings all count. It also includes asking to summarize or explain a policy topic, and follow-ups that ask for MORE policy detail even when they reference the prior turn. When in doubt between policy and out_of_scope, choose policy — retrieval can still decline if nothing relevant is found.
+- hr: like policy, but the query needs the CALLER'S OWN live HR data to answer fully — their remaining leave/PTO balance, how many days they have left, or their own leave record. Signals: "how many leaves/PTO/days do I have left", "what's my balance", "my remaining leave", "how much leave have I used". A generic question about the leave POLICY (accrual rules, who is eligible, how carryover works) is still policy, not hr — hr is only when the answer needs THIS person's live numbers.
 - meta: the query is about THIS CONVERSATION itself — the messages exchanged, what the user asked, what the assistant previously said, or a recap/count of the chat. The answer comes from the conversation transcript, not from policy documents. Signals: "I/you/we" referring to earlier turns, "this conversation/chat", "so far", "earlier", "last/previous question or answer", "what did you say", "repeat that", "how many questions", "recap/summarize our discussion".
 - chitchat: a greeting, thanks, farewell, or light social pleasantry, or a simple question about Aria itself or its capabilities ("hi", "hello", "good morning", "thanks", "how are you", "who are you", "are you real", "what can you do", "what can you help with"). No company-policy substance is needed and nothing in the transcript is needed — it just deserves a warm, brief, human reply. This is NOT out_of_scope.
 - out_of_scope: general knowledge, code, or tasks with no connection to the company, OR any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy. A genuine question about handling or reporting a workplace situation is NOT out_of_scope simply because it is phrased personally or asks "what do I do" — that is policy.
@@ -210,6 +211,8 @@ Classify the user's latest query for a company policy assistant. Return exactly 
 ### 3. Disambiguation
 - A greeting, thanks, farewell, or a question about who/what Aria is or what it can do -> chitchat (warm reply), NOT out_of_scope.
 - A request for the rule, entitlement, or the procedure to handle/report a workplace situation -> policy, no matter how conversational or first-person the wording.
+- "how many leaves/days do I have left" / "what's my leave balance" / "how much PTO have I used" -> hr (needs the caller's live personal data).
+- "what is the leave/PTO policy" / "how does accrual work" / "who is eligible for leave" -> policy (document rule, no personal data).
 - "summarize the <topic> policy" / "explain <topic>" -> policy (document substance).
 - "summarize/recap what WE discussed" or "what have I asked" -> meta (the conversation).
 - A follow-up that needs new policy facts -> policy, even if it says "you mentioned" or "earlier".
@@ -250,6 +253,10 @@ Latest query:
         return "chitchat"
     if "out_of_scope" in label or "out of scope" in label:
         return "out_of_scope"
+    # `hr` last before the policy fallback: the other four labels contain no `hr`
+    # substring, so this ordering is unambiguous.
+    if "hr" in label:
+        return "hr"
     return "policy"
 
 
