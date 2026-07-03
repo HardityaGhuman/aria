@@ -102,6 +102,23 @@ def test_sentinel_reply_never_leaks_and_maps_to_no_results(monkeypatch):
     assert done["data"]["answer"] == cs.NO_RESULTS_MESSAGE  # English default
 
 
+def test_no_retrieval_results_message_is_localized(monkeypatch):
+    # Parity with the sync path: a Spanish-language user must get the Spanish
+    # "couldn't find that" message on the streaming no-results branch too.
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(cs, "retrieve_context",
+                        lambda *a, **k: RetrievedContext("", [], status="ok"))
+    monkeypatch.setattr(cs, "_user_language", lambda owner_user_id: "Spanish")
+
+    events = _collect("s1", "una pregunta sin respuesta", ["all"], ["global", "us"])
+
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["status"] == "no_results"
+    assert done["data"]["answer"] == cs._NO_RESULTS_BY_LANGUAGE["Spanish"]
+
+
 def test_empty_message_emits_error_event(monkeypatch):
     _patch_common(monkeypatch)
     events = _collect("s1", "   ", ["all"], ["global", "us"])
