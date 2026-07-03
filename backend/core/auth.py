@@ -123,7 +123,7 @@ def get_current_user(
 
     Stateless by design: no DB hit per request, which suits the serverless
     direction. Tradeoff — a deleted or role-changed user keeps access until the
-    token expires (JWT_EXPIRY_HOURS).
+    token expires (ACCESS_TOKEN_TTL_MIN).
     """
     if credentials is None or not credentials.credentials:
         raise HTTPException(
