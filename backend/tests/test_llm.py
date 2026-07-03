@@ -84,6 +84,36 @@ def test_get_llm_response_threads_extra_directive_and_temperature(monkeypatch):
     assert "RE-EXPLAIN SIMPLY" in joined
 
 
+# --- Streaming resilience parity: retry the initial connect like the sync path ---
+# get_llm_response rides call_with_retry; stream_llm_response dialed litellm
+# directly, so one transient "connection reset" failed the whole stream. Retrying
+# is only safe BEFORE any token is yielded (a mid-stream retry would duplicate
+# text), so the retry wraps just the initial completion call.
+
+def test_stream_llm_response_retries_transient_connect_error(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = {"n": 0}
+
+    def fake_completion(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception("Connection reset by peer")
+        return iter([
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="hi"))],
+                usage=None,
+            )
+        ])
+
+    monkeypatch.setattr(llm, "LLM_RETRY_BASE_DELAY", 0)
+    monkeypatch.setattr(llm.litellm, "completion", fake_completion)
+
+    tokens = list(llm.stream_llm_response("q", "ctx", []))
+    assert tokens == ["hi"]
+    assert calls["n"] == 2  # failed once, retried, streamed
+
+
 def test_get_llm_response_defaults_to_zero_temperature(monkeypatch):
     captured = {}
 

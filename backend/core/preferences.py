@@ -12,11 +12,9 @@ error, parameterized SQL only.
 from dataclasses import dataclass
 
 # pyrefly: ignore [missing-import]
-import psycopg
-# pyrefly: ignore [missing-import]
 from psycopg.rows import dict_row
 
-from backend.core.config import DATABASE_URL
+from backend.core import db
 
 # Sensible neutral defaults returned when a user has set nothing.
 DEFAULTS = {"tone": "neutral", "response_length": "medium", "language": "English"}
@@ -28,13 +26,10 @@ class PreferencesError(Exception):
 
 
 def _connect():
-    try:
-        return psycopg.connect(DATABASE_URL)
-    except Exception as exc:
-        raise PreferencesError(
-            "Could not connect to PostgreSQL for preferences. "
-            "Make sure DATABASE_URL points to a running PostgreSQL database."
-        ) from exc
+    return db.pooled(lambda: PreferencesError(
+        "Could not connect to PostgreSQL for preferences. "
+        "Make sure DATABASE_URL points to a running PostgreSQL database."
+    ))
 
 
 def initialize_preferences_table() -> None:

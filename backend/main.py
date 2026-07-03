@@ -78,6 +78,13 @@ async def startup_event():
     else:
         logger.info("Vector store ready (%d chunks).", chunk_count)
 
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close the DB connection pool so its worker threads stop cleanly."""
+    from backend.core.db import close_pool
+    close_pool()
+
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(me_router)

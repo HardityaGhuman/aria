@@ -14,12 +14,10 @@ import uuid
 from typing import Protocol
 
 # pyrefly: ignore [missing-import]
-import psycopg
-# pyrefly: ignore [missing-import]
 from psycopg.rows import dict_row
 
+from backend.core import db
 from backend.core.chat_memory import ChatMemoryError
-from backend.core.config import DATABASE_URL
 
 
 class SessionStore(Protocol):
@@ -36,13 +34,10 @@ class PostgresSessionStore:
     """``SessionStore`` backed by the ``chat_sessions`` table (parameterized SQL)."""
 
     def _connect(self):
-        try:
-            return psycopg.connect(DATABASE_URL)
-        except Exception as exc:
-            raise ChatMemoryError(
-                "Could not connect to PostgreSQL for sessions. "
-                "Make sure DATABASE_URL points to a running PostgreSQL database."
-            ) from exc
+        return db.pooled(lambda: ChatMemoryError(
+            "Could not connect to PostgreSQL for sessions. "
+            "Make sure DATABASE_URL points to a running PostgreSQL database."
+        ))
 
     def create(self, owner_user_id: int, title: str | None = None) -> str:
         session_id = uuid.uuid4().hex

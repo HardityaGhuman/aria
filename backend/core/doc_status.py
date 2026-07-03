@@ -12,11 +12,9 @@ error, parameterized SQL only.
 from dataclasses import dataclass
 
 # pyrefly: ignore [missing-import]
-import psycopg
-# pyrefly: ignore [missing-import]
 from psycopg.rows import dict_row
 
-from backend.core.config import DATABASE_URL
+from backend.core import db
 
 VALID_STATUSES = ("queued", "processing", "indexed", "failed")
 
@@ -27,13 +25,10 @@ class DocStatusError(Exception):
 
 
 def _connect():
-    try:
-        return psycopg.connect(DATABASE_URL)
-    except Exception as exc:
-        raise DocStatusError(
-            "Could not connect to PostgreSQL for document status. "
-            "Make sure DATABASE_URL points to a running PostgreSQL database."
-        ) from exc
+    return db.pooled(lambda: DocStatusError(
+        "Could not connect to PostgreSQL for document status. "
+        "Make sure DATABASE_URL points to a running PostgreSQL database."
+    ))
 
 
 def initialize_doc_status_table() -> None:

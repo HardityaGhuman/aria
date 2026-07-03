@@ -5,8 +5,10 @@ import os
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
-MODEL_NAME = os.getenv("MODEL_NAME", "groq/llama-3.3-70b-versatile")
-ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", "groq/llama-3.1-8b-instant")
+# Defaults follow Groq's migration off the deprecated llama-3.x endpoints
+# (provider shutdown 2026-08-16): gpt-oss-120b answers, gpt-oss-20b routes.
+MODEL_NAME = os.getenv("MODEL_NAME", "groq/openai/gpt-oss-120b")
+ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL_NAME", "groq/openai/gpt-oss-20b")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
 # Provider tokens-per-minute budget, used to throttle batch evaluation runs.
 LLM_TOKENS_PER_MINUTE = int(os.getenv("LLM_TOKENS_PER_MINUTE", "12000"))
@@ -44,13 +46,24 @@ QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "t
 # set false to disable all telemetry emission (the request path is unchanged).
 TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
+# --- Agentic tool layer (Phase A) ---
+# Master rollback switch. false ⇒ the pipeline is pure-RAG, identical to today.
+AGENT_TOOLS_ENABLED = os.getenv("AGENT_TOOLS_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# Hard cap on agent-loop iterations — bounds cost/latency and a tool-call storm.
+MAX_TOOL_STEPS = int(os.getenv("MAX_TOOL_STEPS", "3"))
+# Model used to select/extract tool calls on the READ lane. Defaults to the small
+# (20b) router model — a wrong read is self-scoped and harmless, so it need not ride
+# the large model. The large model stays the default inside select_tool_call itself,
+# so a future WRITE tool-select is unaffected (writes stay large). Final answer
+# synthesis (get_llm_response) is always the large model.
+AGENT_READ_MODEL = os.getenv("AGENT_READ_MODEL", ROUTER_MODEL_NAME)
+
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
 # so tests and tooling can import config without a secret present. The server
 # refuses to boot without it; signing tokens with a default key would be insecure.
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
 # Short-lived access token (minutes) + long-lived refresh token (days). The SPA
 # holds the access token in memory and silently refreshes via the httpOnly cookie.
 ACCESS_TOKEN_TTL_MIN = int(os.getenv("ACCESS_TOKEN_TTL_MIN", "30"))
@@ -85,7 +98,7 @@ SYSTEM_PROMPT_PATH = _resolve_backend_path(os.getenv("SYSTEM_PROMPT_PATH", os.pa
 if not MODEL_NAME:
     raise ValueError(
         "MODEL_NAME is missing. Please set it in your .env file.\n"
-        "Format: provider/model_id (e.g. gemini/gemini-2.5-flash, openai/gpt-4o, groq/llama-3.3-70b-versatile)"
+        "Format: provider/model_id (e.g. gemini/gemini-2.5-flash, openai/gpt-4o, groq/openai/gpt-oss-120b)"
     )
 
 if not ROUTER_MODEL_NAME:

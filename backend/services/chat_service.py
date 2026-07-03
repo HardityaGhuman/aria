@@ -45,7 +45,9 @@ from backend.core.preferences import (
     get_preferences,
 )
 from backend.core.trace import emit_request_trace, reset_trace, start_trace
+from backend.core.tools.principal import Principal
 from backend.rag import retrieve_context, rewrite_query
+from backend.services.supervisor import route, run_specialist
 
 logger = get_logger(__name__)
 
@@ -261,6 +263,33 @@ def _is_insufficient_policy_answer(reply: str) -> bool:
     return len(normalized) <= _FULL_REFUSAL_MAX_CHARS
 
 
+def _grounding_status(reply: str) -> str:
+    """Classify a policy-route reply: ok | no_results | refused.
+
+    The single source of truth for the post-answer grounding check, shared by the
+    sync and streaming paths so the two can't drift. An ungrounded reply (sentinel,
+    refusal, whole-answer "not found") must never carry sources. The sentinel is
+    the primary, language-agnostic signal; the English string matchers stay as a
+    fallback for a model that answered in English without emitting the token."""
+    if _is_no_context_sentinel(reply):
+        return "no_results"
+    if _is_refusal(reply):
+        return "refused"
+    if _is_insufficient_policy_answer(reply):
+        return "no_results"
+    return "ok"
+
+
+def _rephrase_adjustments(message: str, formatted_history: list[dict]) -> tuple[str | None, float]:
+    """(extra_directive, temperature) when the user asked to re-explain the
+    previous answer, else (None, 0.0). At temperature 0 the same query retrieves
+    the same chunks and the model returns byte-identical text — the directive plus
+    a mild temperature bump breaks that."""
+    if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
+        return _REEXPLAIN_DIRECTIVE, _REEXPLAIN_TEMPERATURE
+    return None, 0.0
+
+
 async def _run_blocking(fn, *args, timeout_detail: str, **kwargs):
     """Offload a blocking LLM call to a worker thread with a timeout, mapping
     failures to the uniform error envelope so the client sees one error shape.
@@ -371,6 +400,8 @@ async def _answer_policy_query(
     allowed_regions: list[str] | None = None,
     preferences: str | None = None,
     language: str = "English",
+    principal: Principal | None = None,
+    classification: str = "policy",
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
@@ -380,14 +411,19 @@ async def _answer_policy_query(
     if not retrieved.sources:
         return ChatResult(_localized_no_results(language), "", [], status="no_results")
 
-    # If the user asked to re-explain the previous answer, push a "say it
-    # differently" directive and raise the temperature — at temperature 0 the same
-    # query retrieves the same chunks and the model returns byte-identical text.
-    extra_directive = None
-    temperature = 0.0
-    if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
-        extra_directive = _REEXPLAIN_DIRECTIVE
-        temperature = _REEXPLAIN_TEMPERATURE
+    extra_directive, temperature = _rephrase_adjustments(message, formatted_history)
+
+    # Hierarchical routing: the classifier picked a domain; delegate to ONE specialist
+    # over its scoped registry and fold its trusted tool note into the grounded answer.
+    # Policy-agent / flag-off / gather failure ⇒ tool_note is None and the call is
+    # byte-for-byte today's pure-RAG path.
+    tool_note = None
+    if principal is not None:
+        specialist = route(classification, principal)
+        spec_result = await run_specialist(specialist, message, formatted_history, principal)
+        tool_note = spec_result.tool_note
+
+    combined_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
 
     reply = await _run_blocking(
         get_llm_response,
@@ -396,19 +432,14 @@ async def _answer_policy_query(
         context=retrieved.text,
         history=formatted_history,
         preferences=preferences,
-        extra_directive=extra_directive,
+        extra_directive=combined_directive,
         temperature=temperature,
     )
 
-    # A refusal or "not enough info" reply isn't grounded in the retrieved
-    # chunks, so drop the context and sources. The sentinel is the primary,
-    # language-agnostic signal; the English string matchers stay as a fallback
-    # for a model that answered in English without emitting the token.
-    if _is_no_context_sentinel(reply):
-        return ChatResult(_localized_no_results(language), "", [], status="no_results")
-    if _is_refusal(reply):
+    status = _grounding_status(reply)
+    if status == "refused":
         return ChatResult(reply, "", [], status="refused")
-    if _is_insufficient_policy_answer(reply):
+    if status == "no_results":
         return ChatResult(_localized_no_results(language), "", [], status="no_results")
     return ChatResult(reply, retrieved.text, retrieved.sources, status="ok")
 
@@ -419,6 +450,7 @@ async def generate_chat_reply(
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
     owner_user_id: int | None = None,
+    principal: Principal | None = None,
 ) -> ChatResult:
     """Full chat flow: prepare history, classify, answer, persist the exchange.
 
@@ -491,13 +523,14 @@ async def generate_chat_reply(
             language = await asyncio.to_thread(_user_language, owner_user_id)
             result = await _answer_policy_query(
                 message, formatted_history, allowed_tiers, allowed_regions,
-                preferences=pref_note, language=language,
+                preferences=pref_note, language=language, principal=principal,
+                classification=classification,
             )
 
         try:
             # Mirror the streaming path: persist citations only for a grounded answer,
             # in the same Source shape the client receives.
-            persisted_sources = _source_dicts(result.sources) if result.status == "ok" else []
+            persisted_sources = to_source_dicts(result.sources) if result.status == "ok" else []
             append_exchange(
                 session_id, message, result.reply,
                 owner_user_id=owner_user_id, sources=persisted_sources,
@@ -530,9 +563,10 @@ def _retrieved_meta(sources: list[dict]) -> list[dict]:
     return [{"doc_id": s.get("source", ""), "score": s.get("distance")} for s in sources]
 
 
-def _source_dicts(raw_sources: list[dict]) -> list[dict]:
+def to_source_dicts(raw_sources: list[dict]) -> list[dict]:
     """Map the retriever's per-chunk dicts onto the frozen Source shape used in
-    the response envelope (document_id/file/section/source_type)."""
+    the response envelope (document_id/file/section/source_type). Public: the
+    route layer reuses it so the sync and SSE payloads share one mapping."""
     out = []
     for item in raw_sources:
         document_id = item.get("source", "")
@@ -580,6 +614,7 @@ async def stream_chat_reply(
     allowed_tiers: list[str] | None = None,
     allowed_regions: list[str] | None = None,
     owner_user_id: int | None = None,
+    principal: Principal | None = None,
 ):
     """Async generator yielding typed SSE events for the chat flow.
 
@@ -681,17 +716,30 @@ async def stream_chat_reply(
 
         if not retrieved.sources:
             final_status = "no_results"
-            yield {"event": "done", "data": _envelope(NO_RESULTS_MESSAGE, [], "no_results")}
-            await _persist_quietly(session_id, message, NO_RESULTS_MESSAGE, owner_user_id)
+            language = await asyncio.to_thread(_user_language, owner_user_id)
+            answer = _localized_no_results(language)
+            yield {"event": "done", "data": _envelope(answer, [], "no_results")}
+            await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
-        # Same re-explain handling as the sync path: vary the reply when the user
-        # asked to rephrase the previous answer, so streaming doesn't re-emit it verbatim.
-        extra_directive = None
-        temperature = 0.0
-        if _is_rephrase_request(message) and _has_prior_answer(formatted_history):
-            extra_directive = _REEXPLAIN_DIRECTIVE
-            temperature = _REEXPLAIN_TEMPERATURE
+        # Hierarchical routing (streaming): delegate to ONE specialist, emit the
+        # reserved tool events for whatever it gathered, then fold the trusted tool
+        # note into the streamed grounded answer. Policy-agent / flag-off / gather
+        # failure ⇒ tool_note is None, today's pure-RAG path.
+        tool_note = None
+        if principal is not None:
+            specialist = route(classification, principal)
+            spec_result = await run_specialist(specialist, message, formatted_history, principal)
+            for entry in spec_result.tool_results:
+                yield {"event": "tool_call", "data": {"name": entry["name"]}}
+                yield {"event": "tool_result", "data": {
+                    "name": entry["name"], "status": entry["result"].status}}
+            tool_note = spec_result.tool_note
+
+        extra_directive, temperature = _rephrase_adjustments(message, formatted_history)
+
+        # Prepend the trusted tool note so the live number reaches the model.
+        extra_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
 
         token_iter = stream_llm_response(
             message, retrieved.text, formatted_history, pref_note,
@@ -719,31 +767,25 @@ async def stream_chat_reply(
             gate_open = True
             yield {"event": "token", "data": {"delta": full_answer}}
 
-        # Post-checks mirror the non-streaming path: an ungrounded answer drops
-        # its sources and reports the matching status.
+        # Post-checks share _grounding_status with the sync path. One transport
+        # difference: if the whole reply was the sentinel it was never streamed, so
+        # we can still replace it with the localized "couldn't find that" message;
+        # any other ungrounded text has already reached the client and only its
+        # status/sources can be corrected.
         final_sources: list[dict] = []
         if not gate_open and _is_no_context_sentinel(full_answer):
-            # The whole reply was the sentinel — never streamed. Replace it with the
-            # localized "couldn't find that" message the user can actually read.
             final_status = "no_results"
             language = await asyncio.to_thread(_user_language, owner_user_id)
             full_answer = _localized_no_results(language)
             yield {"event": "token", "data": {"delta": full_answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
-        elif _is_refusal(full_answer):
-            final_status = "refused"
-            yield {"event": "sources", "data": {"sources": []}}
-            yield {"event": "done", "data": _envelope(full_answer, [], "refused")}
-        elif _is_insufficient_policy_answer(full_answer):
-            final_status = "no_results"
-            yield {"event": "sources", "data": {"sources": []}}
-            yield {"event": "done", "data": _envelope(full_answer, [], "no_results")}
         else:
-            final_status = "ok"
-            final_sources = _source_dicts(retrieved.sources)
+            final_status = _grounding_status(full_answer)
+            if final_status == "ok":
+                final_sources = to_source_dicts(retrieved.sources)
             yield {"event": "sources", "data": {"sources": final_sources}}
-            yield {"event": "done", "data": _envelope(full_answer, final_sources, "ok")}
+            yield {"event": "done", "data": _envelope(full_answer, final_sources, final_status)}
 
         await _persist_quietly(session_id, message, full_answer, owner_user_id, final_sources)
 
