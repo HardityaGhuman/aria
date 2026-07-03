@@ -23,7 +23,6 @@ from backend.core.chat_memory import (
     update_session_summary,
 )
 from backend.core.config import (
-    AGENT_TOOLS_ENABLED,
     LLM_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
@@ -46,10 +45,9 @@ from backend.core.preferences import (
     get_preferences,
 )
 from backend.core.trace import emit_request_trace, reset_trace, start_trace
-from backend.core.tools.build import build_default_registry
 from backend.core.tools.principal import Principal
 from backend.rag import retrieve_context, rewrite_query
-from backend.services.agent_loop import run_agent_loop
+from backend.services.supervisor import route, run_specialist
 
 logger = get_logger(__name__)
 
@@ -239,54 +237,6 @@ class ChatResult:
     status: str = "ok"
 
 
-# The live tool registry (leave_balance → MockHRIS). Built once at import; read-only.
-_REGISTRY = build_default_registry()
-
-
-async def _gather_tool_outcome(message, formatted_history, principal):
-    """Run the read-tool gather pass, returning the AgentOutcome or None.
-
-    Best-effort by design: the tool note is optional garnish on a grounded
-    answer, so ANY failure here (tool-select LLM down, a tool backend bug, a
-    timeout) degrades to the pure-RAG answer instead of failing an answerable
-    question. Flag off / no principal / no visible tools ⇒ None without ever
-    touching the loop."""
-    if not (AGENT_TOOLS_ENABLED and principal is not None):
-        return None
-    try:
-        if not _REGISTRY.specs_for(principal):
-            return None
-        return await asyncio.wait_for(
-            asyncio.to_thread(
-                run_agent_loop, message, formatted_history, principal, _REGISTRY,
-                gather_only=True,
-            ),
-            timeout=LLM_TIMEOUT_SECONDS + 5,
-        )
-    except Exception:
-        logger.exception("Tool gather failed; answering from retrieval only")
-        return None
-
-
-def _tool_results_directive(tool_results: list[dict]) -> str | None:
-    """Fold gathered tool outputs into a TRUSTED data note for the grounded answer
-    model. Unlike retrieved document text, this came from our own authenticated
-    system calls (the HRIS) for THIS caller, so the model may state it as fact.
-    Returns None when nothing was gathered (⇒ the answer call is today's path)."""
-    lines = []
-    for entry in tool_results:
-        result = entry.get("result")
-        summary = getattr(result, "summary", None)
-        if summary:
-            lines.append(f"- {entry.get('name')}: {summary}")
-    if not lines:
-        return None
-    return (
-        "Live data retrieved for THIS employee from company systems (trusted — state "
-        "it as fact, it is not from the policy documents):\n" + "\n".join(lines)
-    )
-
-
 def _is_refusal(reply: str) -> bool:
     """True when the model fell back to the off-topic refusal; such replies are
     not grounded, so their retrieved context must be discarded."""
@@ -451,6 +401,7 @@ async def _answer_policy_query(
     preferences: str | None = None,
     language: str = "English",
     principal: Principal | None = None,
+    classification: str = "policy",
 ) -> ChatResult:
     search_query = await _resolve_search_query(message, formatted_history)
     retrieved = retrieve_context(search_query, allowed_tiers=allowed_tiers, allowed_regions=allowed_regions)
@@ -462,11 +413,15 @@ async def _answer_policy_query(
 
     extra_directive, temperature = _rephrase_adjustments(message, formatted_history)
 
-    # Tool-aware fusion: gather read-tool results (e.g. the live leave balance) and
-    # fold them into the grounded answer as a trusted note. Flag off / no principal /
-    # gather failure ⇒ tool_note is None and the call is byte-for-byte today's path.
-    outcome = await _gather_tool_outcome(message, formatted_history, principal)
-    tool_note = _tool_results_directive(outcome.tool_results) if outcome else None
+    # Hierarchical routing: the classifier picked a domain; delegate to ONE specialist
+    # over its scoped registry and fold its trusted tool note into the grounded answer.
+    # Policy-agent / flag-off / gather failure ⇒ tool_note is None and the call is
+    # byte-for-byte today's pure-RAG path.
+    tool_note = None
+    if principal is not None:
+        specialist = route(classification, principal)
+        spec_result = await run_specialist(specialist, message, formatted_history, principal)
+        tool_note = spec_result.tool_note
 
     combined_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
 
@@ -569,6 +524,7 @@ async def generate_chat_reply(
             result = await _answer_policy_query(
                 message, formatted_history, allowed_tiers, allowed_regions,
                 preferences=pref_note, language=language, principal=principal,
+                classification=classification,
             )
 
         try:
@@ -766,17 +722,19 @@ async def stream_chat_reply(
             await _persist_quietly(session_id, message, answer, owner_user_id)
             return
 
-        # Tool-aware fusion (streaming): gather read-tool results, emit the reserved
-        # tool events, then fold the live number into the streamed grounded answer.
-        # Flag off / no principal / gather failure ⇒ tool_note is None, today's path.
+        # Hierarchical routing (streaming): delegate to ONE specialist, emit the
+        # reserved tool events for whatever it gathered, then fold the trusted tool
+        # note into the streamed grounded answer. Policy-agent / flag-off / gather
+        # failure ⇒ tool_note is None, today's pure-RAG path.
         tool_note = None
-        outcome = await _gather_tool_outcome(message, formatted_history, principal)
-        if outcome:
-            for entry in outcome.tool_results:
+        if principal is not None:
+            specialist = route(classification, principal)
+            spec_result = await run_specialist(specialist, message, formatted_history, principal)
+            for entry in spec_result.tool_results:
                 yield {"event": "tool_call", "data": {"name": entry["name"]}}
                 yield {"event": "tool_result", "data": {
                     "name": entry["name"], "status": entry["result"].status}}
-            tool_note = _tool_results_directive(outcome.tool_results)
+            tool_note = spec_result.tool_note
 
         extra_directive, temperature = _rephrase_adjustments(message, formatted_history)
 
