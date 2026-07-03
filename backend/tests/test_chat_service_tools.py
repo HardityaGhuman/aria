@@ -74,3 +74,71 @@ def _async_ret(value):
     async def _fn(*a, **k):
         return value
     return _fn
+
+
+class _Retrieved:
+    status = "ok"
+    text = "PTO policy excerpt."
+    sources = [{"source": "time-and-leave/working-hours-and-pto.md"}]
+    blocked_contact = None
+
+
+def test_agent_loop_failure_degrades_to_pure_rag(monkeypatch):
+    # The tool note is optional garnish: if the whole gather step blows up
+    # (select LLM down, registry bug), the policy answer must still be produced
+    # from retrieval alone — never a 502 for an answerable question.
+    monkeypatch.setattr(cs, "AGENT_TOOLS_ENABLED", True)
+
+    def exploding_loop(*a, **k):
+        raise RuntimeError("tool-select provider down")
+
+    captured = {}
+
+    def fake_get_llm_response(user_message, context, history, preferences=None,
+                              extra_directive=None, temperature=0):
+        captured["extra_directive"] = extra_directive
+        return "Full-time employees accrue 20 PTO days."
+
+    monkeypatch.setattr(cs, "run_agent_loop", exploding_loop)
+    monkeypatch.setattr(cs, "get_llm_response", fake_get_llm_response)
+    monkeypatch.setattr(cs, "retrieve_context", lambda *a, **k: _Retrieved())
+    monkeypatch.setattr(cs, "_resolve_search_query", _async_ret("pto policy"))
+
+    import asyncio
+    result = asyncio.run(cs._answer_policy_query(
+        "how much pto do i get", [], ["all"], ["global", "us"],
+        principal=EMPLOYEE,
+    ))
+    assert result.status == "ok"
+    assert "20 PTO days" in result.reply
+    assert captured["extra_directive"] is None  # no tool note — pure-RAG call
+
+
+def test_agent_loop_failure_degrades_to_pure_rag_streaming(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(cs, "AGENT_TOOLS_ENABLED", True)
+    monkeypatch.setattr(cs, "_prepare_history", lambda session_id: [])
+    monkeypatch.setattr(cs, "_persist_quietly", lambda *a, **k: asyncio.sleep(0))
+    monkeypatch.setattr(cs, "_resolve_search_query", _async_ret("pto policy"))
+    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(cs, "retrieve_context", lambda *a, **k: _Retrieved())
+
+    def exploding_loop(*a, **k):
+        raise RuntimeError("tool-select provider down")
+
+    monkeypatch.setattr(cs, "run_agent_loop", exploding_loop)
+    monkeypatch.setattr(cs, "stream_llm_response",
+                        lambda *a, **k: iter(["You get ", "20 days."]))
+
+    async def _run():
+        return [ev async for ev in cs.stream_chat_reply(
+            "s1", "how much pto do i get", ["all"], ["global", "us"],
+            principal=EMPLOYEE,
+        )]
+
+    events = asyncio.run(_run())
+    done = events[-1]
+    assert done["event"] == "done"
+    assert done["data"]["status"] == "ok"
+    assert done["data"]["answer"] == "You get 20 days."
+    assert not any(e["event"] == "error" for e in events)

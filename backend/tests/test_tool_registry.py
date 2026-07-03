@@ -58,3 +58,26 @@ def test_invoke_rejects_invalid_args_without_executing():
 
 def test_invoke_unknown_tool_is_error():
     assert _registry().invoke("no_such_tool", {}, EMPLOYEE).status == "error"
+
+
+class _CrashingTool:
+    name = "crash"
+    description = "A tool whose backend blows up, for containment tests."
+    parameters = {"type": "object", "properties": {}, "required": []}
+    requires_confirmation = False
+    min_role = "employee"
+
+    def invoke(self, args: dict, principal: Principal):
+        raise RuntimeError("HRIS connection refused")
+
+
+def test_invoke_contains_tool_exception_as_error_result():
+    # A tool backend raising (network, quota, bug) must surface as an error
+    # ToolResult, never as an exception that kills the whole chat request.
+    reg = ToolRegistry()
+    reg.register(_CrashingTool())
+    result = reg.invoke("crash", {}, EMPLOYEE)
+    assert result.status == "error"
+    assert result.error  # human-readable, non-empty
+    # The raw backend message must not leak to a prompt-bound error string.
+    assert "connection refused" not in (result.error or "").lower()
