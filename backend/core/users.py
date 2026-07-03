@@ -16,7 +16,7 @@ import psycopg
 # pyrefly: ignore [missing-import]
 from psycopg.rows import dict_row
 
-from backend.core.config import DATABASE_URL
+from backend.core import db
 
 
 @dataclass
@@ -25,13 +25,10 @@ class UserError(Exception):
 
 
 def _connect():
-    try:
-        return psycopg.connect(DATABASE_URL)
-    except Exception as exc:
-        raise UserError(
-            "Could not connect to PostgreSQL for users. "
-            "Make sure DATABASE_URL points to a running PostgreSQL database."
-        ) from exc
+    return db.pooled(lambda: UserError(
+        "Could not connect to PostgreSQL for users. "
+        "Make sure DATABASE_URL points to a running PostgreSQL database."
+    ))
 
 
 def initialize_users_table() -> None:

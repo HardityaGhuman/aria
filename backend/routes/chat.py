@@ -6,7 +6,6 @@ Thin HTTP layer for the chat feature. Orchestration lives in
 shape responses.
 """
 import json
-import os
 import time
 
 # pyrefly: ignore [missing-import]
@@ -15,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from backend.core.auth import get_current_user, regions_for_user, tiers_for_role
+from backend.core.tools.principal import principal_from_user
 from backend.core.config import RATE_LIMIT_CHAT
 from backend.core.ratelimit import limiter
 from backend.core.chat_memory import (
@@ -32,7 +32,11 @@ from backend.models.response_models import (
     SessionInfo,
     Source,
 )
-from backend.services.chat_service import generate_chat_reply, stream_chat_reply
+from backend.services.chat_service import (
+    generate_chat_reply,
+    stream_chat_reply,
+    to_source_dicts,
+)
 
 
 def _require_owned_session(session_id: str, user: dict) -> None:
@@ -60,19 +64,6 @@ def _require_owned_or_new_session(session_id: str, user: dict) -> None:
         raise HTTPException(status_code=403, detail="Not your session.")
 
 
-def _to_sources(raw: list[dict]) -> list[Source]:
-    """Map the retriever's per-chunk dicts onto the frozen ``Source`` shape."""
-    sources = []
-    for item in raw:
-        document_id = item.get("source", "")
-        sources.append(Source(
-            document_id=document_id,
-            file=os.path.basename(document_id),
-            section=item.get("section"),
-            source_type=item.get("access_tier"),
-        ))
-    return sources
-
 # Every chat route requires an authenticated user (any role). The gate is at the
 # router level so no endpoint can be added unsecured by accident.
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -93,11 +84,12 @@ async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_curr
         allowed_tiers=tiers_for_role(user["role"]),
         allowed_regions=regions_for_user(user["region"]),
         owner_user_id=user["id"],
+        principal=principal_from_user(user),
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
     return ChatResponse(
         answer=result.reply,
-        sources=_to_sources(result.sources),
+        sources=[Source(**s) for s in to_source_dicts(result.sources)],
         latency_ms=latency_ms,
         session_id=req.session_id,
         status=result.status,
@@ -122,6 +114,7 @@ async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(g
             allowed_tiers=tiers_for_role(user["role"]),
             allowed_regions=regions_for_user(user["region"]),
             owner_user_id=user["id"],
+            principal=principal_from_user(user),
         ):
             yield {"event": event["event"], "data": json.dumps(event["data"])}
 
