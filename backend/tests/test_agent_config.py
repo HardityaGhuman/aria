@@ -13,9 +13,11 @@ def test_max_tool_steps_defaults_to_three():
     assert config.MAX_TOOL_STEPS == 3
 
 
-def test_agent_read_model_defaults_to_main_model():
-    # v1 rule: tool-select rides the 70B answer model; 8B read promotion is later.
-    assert config.AGENT_READ_MODEL == config.MODEL_NAME
+def test_agent_read_model_defaults_to_router_model():
+    # F2 decision: read tool-select runs on the small (20b) router model; the final
+    # grounded answer stays on the large model, and writes (F3) keep the large
+    # default in select_tool_call itself.
+    assert config.AGENT_READ_MODEL == config.ROUTER_MODEL_NAME
 
 
 def test_agent_tools_enabled_parses_truthy(monkeypatch):
