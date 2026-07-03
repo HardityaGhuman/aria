@@ -5,7 +5,6 @@ import os
 import pytest
 
 os.environ.setdefault("JWT_SECRET", "test-secret-do-not-use-in-prod-0123456789abcdef")
-os.environ.setdefault("JWT_EXPIRY_HOURS", "8")
 
 
 @pytest.fixture(scope="session", autouse=True)
