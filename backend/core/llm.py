@@ -522,7 +522,11 @@ def stream_llm_response(
     messages = _build_messages(system_prompt, augmented_message, history)
 
     t0 = time.perf_counter()
-    response = litellm.completion(
+    # Retry parity with the sync path — but ONLY around the initial connect. Once a
+    # token has been yielded a retry would duplicate streamed text, so mid-stream
+    # failures still surface as errors.
+    response = call_with_retry(
+        litellm.completion,
         model=MODEL_NAME,
         messages=messages,
         timeout=LLM_TIMEOUT_SECONDS,
