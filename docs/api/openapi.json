@@ -62,7 +62,7 @@
         "type": "object"
       },
       "ChatResponse": {
-        "description": "Standardized envelope for ``POST /chat``.\n\n``status`` lets the client distinguish a grounded answer from a graceful\nnon-answer without string-matching the prose: ``ok`` (answered),\n``no_results`` (nothing found), ``blocked`` (RBAC-restricted), ``refused``\n(out of scope).",
+        "description": "Standardized envelope for ``POST /chat``.\n\n``status`` lets the client distinguish a grounded answer from a graceful\nnon-answer without string-matching the prose: ``ok`` (answered), ``partial``\n(a real but incomplete answer, e.g. policy-only when a tool was down),\n``no_results`` (nothing found), ``blocked`` (RBAC-restricted), ``refused``\n(out of scope), ``tool_unavailable`` (the specialist's read tool could not run).",
         "properties": {
           "answer": {
             "description": "The assistant's answer text.",
@@ -88,7 +88,15 @@
             "type": "array"
           },
           "status": {
-            "description": "ok | no_results | blocked | refused.",
+            "description": "ok | partial | no_results | blocked | refused | tool_unavailable.",
+            "enum": [
+              "ok",
+              "partial",
+              "no_results",
+              "blocked",
+              "refused",
+              "tool_unavailable"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -913,7 +921,7 @@
     },
     "/auth/logout": {
       "post": {
-        "description": "Revoke the current refresh token and clear the cookie.",
+        "description": "Revoke the current refresh token and clear the cookie.\n\nCookie-authenticated mutation, so it carries the same exact-Origin CSRF guard\nas /auth/refresh.",
         "operationId": "logout_auth_logout_post",
         "responses": {
           "200": {

@@ -133,6 +133,20 @@ describe("streamChat", () => {
     expect(h.done).toBeUndefined();
   });
 
+  // §4.1 client-contract: the control layer's new envelope statuses must reach
+  // onDone unchanged so the UI can render them distinctly (not collapse to ok/error).
+  it.each(["partial", "tool_unavailable"] as const)(
+    "carries the %s status through the done envelope unchanged",
+    async (status) => {
+      const frame =
+        `event: done\ndata: {"answer":"A","sources":[],"latency_ms":1,"session_id":"s1","status":"${status}"}\n\n`;
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse([frame])));
+      const h = collectingHandlers();
+      await streamChat(BODY, h);
+      expect((h.done as { status: string }).status).toBe(status);
+    },
+  );
+
   it("stops silently on abort without persisting a partial answer", async () => {
     const controller = new AbortController();
     // Body that emits one token, then the caller aborts before completion.
