@@ -2,6 +2,8 @@
 a typed `ReadPlan` in pure Python (no LLM), and `validate_plan` rejects any plan
 whose specialist/tools/budgets/Principal don't line up BEFORE anything executes.
 Every intent→plan mapping and every validation rejection is pinned here."""
+import dataclasses
+
 import pytest
 
 from backend.core.control import models as m
@@ -152,6 +154,32 @@ def test_no_specialist_plan_carrying_tools_is_rejected():
     assert out.valid is False
     assert out.action is m.ValidationAction.STOP
     assert out.code == "invalid_plan"
+
+
+def test_plan_off_canonical_table_is_rejected_even_if_registry_valid():
+    # intent=policy must map to policy-agent with NO tools (§7). A plan that instead
+    # points policy at hr-agent + leave_balance is registry-valid (hr-agent really
+    # owns that tool) yet violates the fixed table — the table is authoritative, so
+    # validate must reject it. Without this, a hand-built (or future mis-wired) plan
+    # could smuggle a tool into an intent the table forbids it for.
+    plan = m.ReadPlan(
+        intent="policy", specialist="hr-agent", allowed_tools=("leave_balance",),
+        retrieval=m.RetrievalRequirement.REQUIRED, needs_live_data=True,
+        max_tool_calls=1, max_retrieval_calls=1, allows_answer_model=True,
+        timeout_ms=8000,
+    )
+    out = rp.validate_plan(plan, _principal(), _pool())
+    assert out.valid is False
+    assert out.action is m.ValidationAction.STOP
+    assert out.code == "plan_off_table"
+
+
+def test_plan_with_inflated_timeout_is_rejected():
+    # timeout_ms is a budget too — a plan can't widen it past the fixed table value.
+    inflated = dataclasses.replace(rp.build_plan("policy"), timeout_ms=999_999_999)
+    out = rp.validate_plan(inflated, _principal(), _pool())
+    assert out.valid is False
+    assert out.code == "plan_off_table"
 
 
 def test_tool_budget_mismatch_is_rejected():

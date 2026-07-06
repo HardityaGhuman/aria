@@ -39,6 +39,15 @@ PLAN_VERSION = "read-v1"
 # recorded step can never smuggle a document body or a live-data payload.
 Scalar = str | int | float | bool | None
 
+# Hard length cap on any string value in StepResult.meta. A `str` is a scalar, so the
+# type guard alone would happily accept a document chunk pasted in as text; meta is
+# only ever ids / scores / short labels (doc paths, section names, strategy/tool
+# names — all well under this), and corpus chunks are 250+ chars by construction, so
+# this bound fails the "no document body in a trace" invariant closed. Defense in
+# depth, not a perfect body-detector: the real contract is that callers pass small
+# labels, and the non-scalar reject stops structured payloads.
+MAX_META_STR_LEN = 256
+
 
 class TerminalState(str, enum.Enum):
     """Every request terminates in exactly one of these — independent of model
@@ -105,13 +114,19 @@ class RequestContext:
 
     def to_trace_record(self) -> dict:
         """Allowlisted, redacted view. Omits `message` (sensitive) and the
-        principal's email (PII); keeps only trace-safe identity + intent + the
-        authorization snapshots."""
+        principal's email (PII). `user_id`/`session_id` correlate to a person, so they
+        pass through the same §3.5 privacy gate as the telemetry tracer: when
+        `TELEMETRY_PSEUDONYMIZE_IDS` is on they scrub to salted `anon_` tokens, else
+        pass through. Role/region stay raw (analysis dimensions, not identities).
+
+        Lazy import of the scrubber keeps this pure-vocabulary module free of a
+        telemetry/config import at load time (and cycle-proof)."""
+        from backend.core.trace import _scrub_id
         return {
             "trace_id": self.trace_id,
-            "session_id": self.session_id,
+            "session_id": _scrub_id(self.session_id),
             "intent": self.intent,
-            "user_id": self.principal.user_id,
+            "user_id": _scrub_id(self.principal.user_id),
             "role": self.principal.role,
             "region": self.principal.region,
             "allowed_tiers": self.allowed_tiers,
@@ -166,6 +181,11 @@ def _freeze_meta(meta: Mapping | tuple) -> tuple[tuple[str, Scalar], ...]:
         if not isinstance(value, (str, int, float, bool, type(None))):
             raise TypeError(
                 f"StepResult.meta[{key!r}] must be a trace-safe scalar, got {type(value).__name__}"
+            )
+        if isinstance(value, str) and len(value) > MAX_META_STR_LEN:
+            raise ValueError(
+                f"StepResult.meta[{key!r}] is {len(value)} chars (> {MAX_META_STR_LEN}); "
+                "meta holds ids/scores/short labels only, never a document body"
             )
         frozen.append((str(key), value))
     return tuple(sorted(frozen))

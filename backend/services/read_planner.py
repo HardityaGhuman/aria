@@ -135,4 +135,23 @@ def validate_plan(plan, principal, specialists) -> ValidationOutcome:
             return stop("tool_forbidden",
                         f"role {principal.role!r} cannot use {tool_name!r}")
 
+    # Finally, pin the whole plan to the canonical §7 table for its intent. The checks
+    # above prove the plan is internally consistent and its tools live in a reachable
+    # registry — but that alone would still pass a plan that pairs the *wrong*
+    # specialist/tools with an intent (e.g. intent=policy routed to hr-agent+
+    # leave_balance: registry-valid, table-illegal). The table is authoritative, so
+    # any divergence on a security-bearing field (specialist, tools, retrieval,
+    # budgets, live-data/answer flags, timeout, or the intent label itself — an
+    # unknown intent normalizes and thus diverges) is rejected. This makes build_plan
+    # the only source of a valid plan, regardless of how a plan object was constructed.
+    canonical = build_plan(plan.intent)
+    _PINNED = (
+        "intent", "specialist", "allowed_tools", "retrieval", "needs_live_data",
+        "max_tool_calls", "max_retrieval_calls", "allows_answer_model", "timeout_ms",
+    )
+    diverged = [f for f in _PINNED if getattr(plan, f) != getattr(canonical, f)]
+    if diverged:
+        return stop("plan_off_table",
+                    f"plan diverges from the fixed table for intent {plan.intent!r}: {diverged}")
+
     return ValidationOutcome.proceed()
