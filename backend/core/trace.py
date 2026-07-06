@@ -13,8 +13,23 @@ chat_service knows synchronously.
 
 Sink is a dedicated 'telemetry' stdlib logger (stdout JSON). All emission is
 best-effort: a logging fault never breaks a chat.
+
+Privacy (production defaults, driven by APP_ENV=production in config):
+  - Raw query text is dropped from request traces unless TELEMETRY_LOG_RAW_QUERY
+    is force-enabled (queries can carry PII).
+  - user_id / session_id are pseudonymized via a salted HMAC (TELEMETRY_ID_SALT)
+    so records still correlate but no raw identity reaches the sink.
+  - Never emitted anywhere: JWTs, document bodies, raw HRIS/calendar payloads,
+    emails. Spans carry only ids + scores + token counts.
+
+Production retention/access expectation: these JSON lines go to Cloud Logging;
+treat the request_trace stream as low-sensitivity operational data with a
+bounded retention window (30 days) and access limited to the ops role. Do not
+route it to any long-term analytics store that widens who can read it.
 """
 import contextvars
+import hashlib
+import hmac
 import json
 import logging
 import uuid
@@ -23,6 +38,26 @@ from dataclasses import dataclass
 from backend.core import config
 
 _telemetry_logger = logging.getLogger("telemetry")
+
+
+def _pseudonymize(value) -> str | None:
+    """Stable salted digest of an id so records still correlate but the raw
+    identity never reaches the sink. Returns None untouched."""
+    if value is None:
+        return None
+    digest = hmac.new(
+        config.TELEMETRY_ID_SALT.encode("utf-8"),
+        str(value).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"anon_{digest[:16]}"
+
+
+def _scrub_id(value):
+    """Pseudonymize an id when the privacy flag is on; otherwise pass through."""
+    if config.TELEMETRY_PSEUDONYMIZE_IDS:
+        return _pseudonymize(value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -107,9 +142,9 @@ def emit_request_trace(
     _emit({
         "event": "request_trace",
         "trace_id": ctx.trace_id if ctx else None,
-        "user_id": ctx.user_id if ctx else None,
-        "session_id": ctx.session_id if ctx else None,
-        "query": query,
+        "user_id": _scrub_id(ctx.user_id) if ctx else None,
+        "session_id": _scrub_id(ctx.session_id) if ctx else None,
+        "query": query if config.TELEMETRY_LOG_RAW_QUERY else None,
         "classification": classification,
         "strategy": strategy,
         "retrieved": retrieved or [],

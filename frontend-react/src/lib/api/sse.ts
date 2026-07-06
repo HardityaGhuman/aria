@@ -1,4 +1,4 @@
-import { getAccessToken } from "./client";
+import { getAccessToken, refreshAccessToken, triggerAuthFailure } from "./client";
 import { API_BASE } from "../config";
 import type { Source, ChatStatus } from "./schemas";
 
@@ -45,13 +45,12 @@ export function parseSSE(
   return { events, buffer: tail };
 }
 
-export async function streamChat(
+function openStream(
   body: { message: string; session_id: string },
-  handlers: StreamHandlers,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<Response> {
   const token = getAccessToken();
-  const res = await fetch(`${API_BASE}/chat/stream`, {
+  return fetch(`${API_BASE}/chat/stream`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -61,6 +60,39 @@ export async function streamChat(
     body: JSON.stringify(body),
     signal,
   });
+}
+
+export async function streamChat(
+  body: { message: string; session_id: string },
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await openStream(body, signal);
+
+    // Access token expired mid-session: refresh once and re-establish the stream.
+    // A second 401 (or a failed refresh) is unrecoverable — bounce to login.
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        triggerAuthFailure();
+        handlers.onError("unauthorized", "Session expired");
+        return;
+      }
+      res = await openStream(body, signal);
+      if (res.status === 401) {
+        triggerAuthFailure();
+        handlers.onError("unauthorized", "Session expired");
+        return;
+      }
+    }
+  } catch (err) {
+    // A caller-triggered abort during connect is not an error to surface.
+    if (signal?.aborted) return;
+    handlers.onError("stream_failed", (err as Error)?.message ?? "Stream failed");
+    return;
+  }
 
   if (!res.ok || !res.body) {
     handlers.onError("stream_failed", `Stream failed (${res.status})`);
@@ -71,17 +103,27 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    const parsed = parseSSE(decoder.decode(value, { stream: true }), buffer);
-    buffer = parsed.buffer;
-    for (const ev of parsed.events) {
-      if (ev.event === "token") handlers.onToken(ev.data.delta);
-      else if (ev.event === "sources") handlers.onSources(ev.data.sources ?? []);
-      else if (ev.event === "done") handlers.onDone(ev.data as DoneEnvelope);
-      else if (ev.event === "error")
-        handlers.onError(ev.data?.error?.code ?? "error", ev.data?.error?.message ?? "Error");
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const parsed = parseSSE(decoder.decode(value, { stream: true }), buffer);
+      buffer = parsed.buffer;
+      for (const ev of parsed.events) {
+        if (ev.event === "token") handlers.onToken(ev.data.delta);
+        else if (ev.event === "sources") handlers.onSources(ev.data.sources ?? []);
+        else if (ev.event === "done") handlers.onDone(ev.data as DoneEnvelope);
+        else if (ev.event === "error")
+          handlers.onError(ev.data?.error?.code ?? "error", ev.data?.error?.message ?? "Error");
+      }
     }
+  } catch (err) {
+    // Aborted read (user cancelled / navigated away): stop silently. The partial
+    // answer is never handed to onDone, so nothing incomplete is treated as final.
+    if (signal?.aborted) return;
+    handlers.onError("stream_failed", (err as Error)?.message ?? "Stream interrupted");
+  } finally {
+    // Release the network stream on every exit path, including abort.
+    reader.cancel().catch(() => {});
   }
 }
