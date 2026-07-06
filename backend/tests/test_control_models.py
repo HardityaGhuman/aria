@@ -87,6 +87,27 @@ def test_request_context_trace_record_omits_message_and_email():
     assert rec["allowed_tiers"] == ("all",)
 
 
+def test_request_context_trace_record_pseudonymizes_ids_when_flag_on(monkeypatch):
+    # The §3.5 privacy default must reach the control serializer too — raw user_id /
+    # session_id can correlate a person, so they scrub to salted anon_ tokens.
+    from backend.core import trace
+    monkeypatch.setattr(trace.config, "TELEMETRY_PSEUDONYMIZE_IDS", True)
+    monkeypatch.setattr(trace.config, "TELEMETRY_ID_SALT", "pepper")
+    rec = _context().to_trace_record()
+    assert rec["user_id"] != 7
+    assert str(rec["user_id"]).startswith("anon_")
+    assert rec["session_id"] != "s1"
+    assert str(rec["session_id"]).startswith("anon_")
+
+
+def test_request_context_trace_record_passes_ids_through_when_flag_off(monkeypatch):
+    from backend.core import trace
+    monkeypatch.setattr(trace.config, "TELEMETRY_PSEUDONYMIZE_IDS", False)
+    rec = _context().to_trace_record()
+    assert rec["user_id"] == 7
+    assert rec["session_id"] == "s1"
+
+
 # --- ReadPlan -------------------------------------------------------------
 
 def test_read_plan_defaults_plan_version_and_is_frozen():
@@ -149,6 +170,22 @@ def test_step_result_meta_rejects_non_scalar_values():
     with pytest.raises(TypeError):
         m.StepResult(kind="retrieval", name="hybrid", status="ok",
                      latency_ms=1, meta={"body": ["a", "b"]})
+
+
+def test_step_result_meta_rejects_oversized_string_value():
+    # A str IS a scalar, so the non-scalar guard alone can't stop a document body
+    # being dumped into meta as a string. A hard length cap fails that closed.
+    body = "x" * 5000
+    with pytest.raises(ValueError):
+        m.StepResult(kind="retrieval", name="hybrid", status="ok",
+                     latency_ms=1, meta={"chunk": body})
+
+
+def test_step_result_meta_allows_normal_short_identifier_strings():
+    # Legit meta values — doc ids, section names, strategy/tool names — stay allowed.
+    step = m.StepResult(kind="retrieval", name="hybrid", status="ok", latency_ms=1,
+                        meta={"doc_id": "legal-compliance/data-protection.md"})
+    assert step.meta_map["doc_id"] == "legal-compliance/data-protection.md"
 
 
 def test_step_result_trace_record_carries_only_safe_fields():
