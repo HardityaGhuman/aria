@@ -30,10 +30,10 @@ def test_route_unmapped_defaults_to_policy():
     assert sup.route("meta", EMPLOYEE).name == "policy-agent"
 
 
-def test_route_calendar_interim_to_hr_agent():
-    # §4.2 interim: whos_out still lives on the hr-agent, so a calendar-labeled
-    # query routes there (not the fallback) until §5.3 adds a calendar-agent.
-    assert sup.route("calendar", EMPLOYEE).name == "hr-agent"
+def test_route_calendar_to_calendar_agent():
+    # §5.3: the interim hr-agent route is retired — a calendar-labeled query now
+    # reaches the dedicated calendar-agent (whos_out lives there, not on hr-agent).
+    assert sup.route("calendar", EMPLOYEE).name == "calendar-agent"
 
 
 def test_route_rbac_fallback_to_policy():
