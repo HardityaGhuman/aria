@@ -35,12 +35,18 @@ function withAuth(init: FetchInit): RequestInit {
   return { ...init, headers, credentials: "include" };
 }
 
-async function refreshAccessToken(): Promise<boolean> {
+export async function refreshAccessToken(): Promise<boolean> {
   const res = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
   if (!res.ok) return false;
   const data = (await res.json()) as { access_token: string };
   accessToken = data.access_token;
   return true;
+}
+
+// Surface an unrecoverable auth failure (e.g. refresh rejected) to the app so it
+// can bounce to login. Shared by apiFetch and the SSE stream path.
+export function triggerAuthFailure() {
+  onAuthFailure();
 }
 
 export async function apiFetch<T>(path: string, init: FetchInit = {}): Promise<T> {
