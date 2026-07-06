@@ -40,7 +40,12 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 _DUMMY_HASH = hash_password("timing-equalizer-not-a-real-password")
 
 REFRESH_COOKIE = "refresh_token"
-REFRESH_PATH = "/auth/refresh"
+# Scope the refresh cookie to /auth (not /auth/refresh) so the browser sends it to
+# BOTH /auth/refresh and /auth/logout. Pinned to /auth/refresh, logout never
+# received the cookie and its revoke was a silent no-op. SameSite=Strict + the
+# exact-Origin check on both endpoints remain the CSRF defense; /auth/login and
+# /auth/me sit under the path too but never read the cookie.
+REFRESH_PATH = "/auth"
 
 
 class LoginRequest(BaseModel):
@@ -128,11 +133,16 @@ def refresh(request: Request, response: Response):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
     if claims.get("type") != "refresh" or not claims.get("jti"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-    if not tokens.is_valid(claims["jti"]):
+
+    # Atomic rotate: consume revokes the jti AND returns its owner in one guarded
+    # statement. Two concurrent requests with the same (possibly stolen) refresh
+    # token can no longer both pass a check-then-act gate and mint two tokens —
+    # exactly one wins, the other gets None here.
+    user_id = tokens.consume(claims["jti"])
+    if user_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked or expired")
 
-    tokens.revoke(claims["jti"])  # rotation: old refresh can never be reused
-    user = users.get_user_by_id(int(claims["sub"]))
+    user = users.get_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
 
@@ -143,7 +153,11 @@ def refresh(request: Request, response: Response):
 @router.post("/logout", response_model=MessageResponse)
 @limiter.limit(RATE_LIMIT_LOGIN)
 def logout(request: Request, response: Response):
-    """Revoke the current refresh token and clear the cookie."""
+    """Revoke the current refresh token and clear the cookie.
+
+    Cookie-authenticated mutation, so it carries the same exact-Origin CSRF guard
+    as /auth/refresh."""
+    _check_origin(request)
     raw = request.cookies.get(REFRESH_COOKIE)
     if raw:
         try:

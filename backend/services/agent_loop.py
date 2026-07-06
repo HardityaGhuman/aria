@@ -54,9 +54,15 @@ def run_agent_loop(
     select_fn = select_fn or _default_select_fn()
     working_message = message
     tool_results: list[dict] = []
+    # Total model (selector) calls allowed this turn. A validate-or-repair re-ask
+    # consumes from the SAME budget as a normal step, so worst-case cost is
+    # max_steps model calls, not 2×max_steps — bounds LLM spend/latency (S5) once
+    # the agent path is live and repairs actually fire.
+    model_calls = 0
 
-    for _ in range(max_steps):
+    while model_calls < max_steps:
         specs = registry.specs_for(principal)
+        model_calls += 1
         selection = select_fn(working_message, specs, history)
 
         if not selection.calls:
@@ -73,10 +79,16 @@ def run_agent_loop(
         # validate-or-repair: one bounded re-ask on invalid args, then hard error.
         errors = validate_args(tool.parameters, call.get("args", {}))
         if errors:
+            if model_calls >= max_steps:
+                # No budget left for a repair re-ask — fail rather than overspend.
+                return AgentOutcome(status="tool_error",
+                                    answer="I couldn't build a valid request for that.",
+                                    tool_results=tool_results)
             hint = (
                 f"{working_message}\n\n[your previous tool call was invalid: "
                 f"{'; '.join(errors)}. Re-emit a valid call.]"
             )
+            model_calls += 1
             selection = select_fn(hint, specs, history)
             if not selection.calls:
                 return AgentOutcome(status="answer", answer=selection.text, tool_results=tool_results)

@@ -87,6 +87,23 @@ def test_invalid_args_get_one_repair_then_error():
     assert out.tool_results == []  # never executed an invalid call
 
 
+def test_repair_calls_count_against_the_model_call_budget():
+    # Selector's first pick each step is invalid, its repair pick is valid → the step
+    # executes, then the loop asks again. Without a shared budget this burns 2 model
+    # calls per step (2×max_steps). A repair must consume from the SAME budget, so
+    # total model (selector) calls stay bounded by max_steps.
+    n = {"count": 0}
+
+    def alternating(message, specs, history):
+        n["count"] += 1
+        if n["count"] % 2 == 1:
+            return ToolSelection(calls=[{"name": "echo", "args": {"text": 123}}], text=None)  # invalid
+        return ToolSelection(calls=[{"name": "echo", "args": {"text": "ok"}}], text=None)  # valid
+
+    run_agent_loop("go", [], EMPLOYEE, _registry(), select_fn=alternating, max_steps=3)
+    assert n["count"] <= 3  # repair included in the budget, not on top of it
+
+
 def test_invalid_args_then_valid_repair_executes():
     fn = _scripted([
         ToolSelection(calls=[{"name": "echo", "args": {"text": 123}}], text=None),

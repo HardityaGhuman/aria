@@ -124,4 +124,6 @@ def test_empty_message_emits_error_event(monkeypatch):
     events = _collect("s1", "   ", ["all"], ["global", "us"])
     assert len(events) == 1
     assert events[0]["event"] == "error"
-    assert events[0]["data"]["code"] == "validation_error"
+    # SSE errors use the SAME nested envelope as the REST path: {"error": {...}}.
+    assert events[0]["data"]["error"]["code"] == "validation_error"
+    assert isinstance(events[0]["data"]["error"]["message"], str)

@@ -1,18 +1,22 @@
 """core/agents/build.py
 ---------------------
 The single place specialists are assembled with their SCOPED registries. HR-agent
-gets ONLY leave_balance (→ MockHRIS); Policy-agent gets an empty registry (pure
-RAG). No specialist ever receives a superset — that is the isolation guarantee the
-supervisor relies on. Swapping MockHRIS for a real adapter is a one-line change here."""
+gets ONLY its own read tools — leave_balance (→ MockHRIS) + whos_out (→ MockCalendar);
+Policy-agent gets an empty registry (pure RAG). No specialist ever receives a
+superset — that is the isolation guarantee the supervisor relies on. Swapping a mock
+for a real adapter is a one-line change here."""
 from backend.core.agents.specialist import Specialist
+from backend.core.calendar.mock import MockCalendar
 from backend.core.hris.mock import MockHRIS
 from backend.core.tools.leave_balance import LeaveBalanceTool
 from backend.core.tools.registry import ToolRegistry
+from backend.core.tools.whos_out import WhosOutTool
 
 
 def _hr_registry() -> ToolRegistry:
     reg = ToolRegistry()
     reg.register(LeaveBalanceTool(MockHRIS()))
+    reg.register(WhosOutTool(MockCalendar()))
     return reg
 
 
@@ -22,7 +26,8 @@ def build_specialists() -> list[Specialist]:
             name="hr-agent",
             description=(
                 "Handles the caller's own HR data and requests — leave balance, "
-                "PTO, and (later) leave requests — fused with policy citations."
+                "PTO, who on the team is out of office, and (later) leave requests "
+                "— fused with policy citations."
             ),
             min_role="employee",
             registry=_hr_registry(),
