@@ -40,12 +40,17 @@
         "properties": {
           "message": {
             "description": "The user's question.",
+            "maxLength": 8000,
+            "minLength": 1,
             "title": "Message",
             "type": "string"
           },
           "session_id": {
             "default": "demo",
             "description": "Conversation id; each session keeps its own history.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
             "title": "Session Id",
             "type": "string"
           }
