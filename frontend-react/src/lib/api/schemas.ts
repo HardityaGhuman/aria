@@ -6,4 +6,6 @@ export type MeResponse = Schemas["MeResponse"];
 export type Source = Schemas["Source"];
 export type SessionInfo = Schemas["SessionInfo"];
 export type Role = "employee" | "manager" | "hr";
-export type ChatStatus = "ok" | "no_results" | "blocked" | "refused";
+// Derived from the codegen'd contract so it always matches the backend
+// envelope: ok | partial | no_results | blocked | refused | tool_unavailable.
+export type ChatStatus = Schemas["ChatResponse"]["status"];
