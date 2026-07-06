@@ -69,3 +69,41 @@ def test_revoke_all_invalidates_every_token_for_user():
     tokens.revoke_all(999)
     assert tokens.is_valid(j1) is False
     assert tokens.is_valid(j2) is False
+
+
+# --- atomic consume (rotation race fix, tighten_plan 3.1) ---
+
+def test_consume_returns_owner_and_invalidates_in_one_call():
+    _db_or_skip()
+    _r, jti, exp = auth.create_refresh_token(USER)
+    tokens.store_refresh(jti, 4242, exp)
+    assert tokens.consume(jti) == 4242
+    # The same jti can never be consumed or validated again.
+    assert tokens.consume(jti) is None
+    assert tokens.is_valid(jti) is False
+
+
+def test_consume_unknown_or_revoked_returns_none():
+    _db_or_skip()
+    _r, jti, exp = auth.create_refresh_token(USER)
+    tokens.store_refresh(jti, 7, exp)
+    tokens.revoke(jti)
+    assert tokens.consume(jti) is None
+    assert tokens.consume("never-issued-jti") is None
+
+
+def test_concurrent_consume_yields_exactly_one_winner():
+    """Two racers presenting the same refresh jti: exactly one gets the owner,
+    the other gets None. This is the guarantee a check-then-act (is_valid then
+    revoke) cannot make."""
+    _db_or_skip()
+    import concurrent.futures
+
+    _r, jti, exp = auth.create_refresh_token(USER)
+    tokens.store_refresh(jti, 555, exp)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: tokens.consume(jti), range(8)))
+
+    winners = [r for r in results if r is not None]
+    assert winners == [555]  # exactly one winner, everyone else None

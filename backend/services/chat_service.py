@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from backend.core.chat_memory import (
     ChatMemoryError,
+    SessionOwnershipError,
     append_exchange,
     delete_messages_before_id,
     get_history_with_ids,
@@ -353,6 +354,24 @@ def _prepare_history(session_id: str) -> list[dict]:
     return formatted_history
 
 
+async def _prepare_history_async(session_id: str) -> list[dict]:
+    """Run the synchronous history load/summarize/prune off the event loop.
+
+    `_prepare_history` does blocking Postgres reads and, once a session crosses the
+    token budget, a blocking LLM summarize call. Called bare from the async chat
+    handlers it stalled the whole event loop for the request's duration, starving
+    every other in-flight request. Offloading to a worker thread keeps the loop free.
+
+    DEFERRED (tighten_plan 3.6, correctness-hardening not a blocker): serialize the
+    summarize-and-prune per session so two concurrent turns on the SAME session
+    can't both prune overlapping history. A naive per-session asyncio.Lock dict
+    grows unbounded with session ids (its own small leak), so it's held back until
+    the control layer owns a bounded session-scoped lock. The window is narrow
+    (same user, two simultaneous turns) and non-security-affecting.
+    """
+    return await asyncio.to_thread(_prepare_history, session_id)
+
+
 def _preferences_note(owner_user_id: int | None) -> str | None:
     """Build the prompt block for a user's durable preferences, or None.
 
@@ -469,7 +488,7 @@ async def generate_chat_reply(
             # error shape everywhere.
             raise AppError("validation_error", "Message cannot be empty.", status_code=422)
 
-        formatted_history = _prepare_history(session_id)
+        formatted_history = await _prepare_history_async(session_id)
 
         # Bare filler ("umm", "idk") carries no question — clarify before spending a
         # classify call or letting the rewriter fabricate a search query from noise.
@@ -535,6 +554,9 @@ async def generate_chat_reply(
                 session_id, message, result.reply,
                 owner_user_id=owner_user_id, sources=persisted_sources,
             )
+        except SessionOwnershipError as e:
+            # Lost the race to claim a brand-new session_id another user just took.
+            raise HTTPException(status_code=403, detail=e.message)
         except ChatMemoryError as e:
             raise HTTPException(status_code=503, detail=e.message)
 
@@ -623,7 +645,7 @@ async def stream_chat_reply(
         token   {"delta": "..."}            incremental answer text
         sources {"sources": [Source, ...]}  citations (emitted once, after tokens)
         done    <ChatResponse envelope>     final answer/status/latency
-        error   {"code","message","detail"} a failure; terminal
+        error   {"error": {"code","message","detail"}}  a failure; terminal (matches REST envelope)
 
     Graceful non-answers (refused/blocked/no_results) emit a single ``done`` with
     that status and NO token events.
@@ -645,12 +667,12 @@ async def stream_chat_reply(
 
     try:
         if not message.strip():
-            yield {"event": "error", "data": {
+            yield {"event": "error", "data": {"error": {
                 "code": "validation_error", "message": "Message cannot be empty.", "detail": None,
-            }}
+            }}}
             return
 
-        formatted_history = _prepare_history(session_id)
+        formatted_history = await _prepare_history_async(session_id)
 
         # Bare filler ("umm", "idk") → clarify before classify/rewrite/retrieval.
         if _is_low_content_message(message):
@@ -791,9 +813,9 @@ async def stream_chat_reply(
 
     except Exception:
         logger.exception("Streaming chat failed for session %s", session_id)
-        yield {"event": "error", "data": {
+        yield {"event": "error", "data": {"error": {
             "code": "internal_error", "message": "An unexpected error occurred.", "detail": None,
-        }}
+        }}}
     finally:
         emit_request_trace(
             query=message,

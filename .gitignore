@@ -55,6 +55,10 @@ Thumbs.db
 CLAUDE.md
 docs/superpowers
 
+# Local planning docs — working contract, kept out of git (code + origin-reflected only)
+tighten_plan.md
+docs/final-rescope-plan.md
+
 # Isolated RAGAS evaluation environment
 eval_venv/
 
