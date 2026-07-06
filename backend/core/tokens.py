@@ -67,6 +67,29 @@ def is_valid(jti: str) -> bool:
             return cursor.fetchone() is not None
 
 
+def consume(jti: str) -> int | None:
+    """Atomically consume a refresh token: revoke it and return its ``user_id``
+    in a single guarded statement, or return ``None`` if it was already revoked,
+    expired, or never issued.
+
+    This replaces the check-then-act ``is_valid`` + ``revoke`` pair on the rotation
+    path. Postgres evaluates the ``WHERE revoked = false`` predicate and the row
+    write atomically, so of N concurrent callers presenting the same jti exactly
+    one sees a row (``RETURNING user_id``) and mints a replacement; the rest get
+    ``None``. A stolen-then-reused refresh token can therefore never rotate twice.
+    """
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE refresh_tokens SET revoked = true "
+                "WHERE jti = %s AND revoked = false AND expires_at > now() "
+                "RETURNING user_id",
+                (jti,),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else None
+
+
 def revoke(jti: str) -> None:
     """Revoke a single refresh token (used on rotation and logout)."""
     with _connect() as connection:

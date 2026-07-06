@@ -12,6 +12,12 @@ from backend.core import db
 class ChatMemoryError(Exception):
     message: str
 
+
+class SessionOwnershipError(ChatMemoryError):
+    """Raised when a write targets a session owned by a different user. A subclass
+    of ChatMemoryError so existing ``except ChatMemoryError`` handlers still catch
+    it; callers that care can map it to 403 instead of 503."""
+
 # You can't run SQL on a connection directly in psycopg — 
 # you must go through a cursor. So any function that talks to the DB needs one. 
 # That's why it appears in all 9 functions, not because it's special, 
@@ -24,10 +30,15 @@ def _connect():
     ))
 
 
-def _ensure_session(cursor, session_id: str, owner_user_id: int | None = None) -> None:
+def _ensure_session(cursor, session_id: str, owner_user_id: int | None = None) -> int | None:
     # On first insert, stamp the owner so the session is user-scoped. On conflict
     # we only bump updated_at and never overwrite an existing owner (COALESCE keeps
-    # the original), so a chat call can't silently reassign someone else's session.
+    # the original). The INSERT ... ON CONFLICT locks the session row and RETURNING
+    # gives us the authoritative post-write owner in the SAME transaction as the
+    # caller's message insert — so when a write provides an owner that disagrees
+    # with the stored one we raise, and the surrounding transaction rolls back,
+    # never inserting a cross-user message. This closes the check-then-act race
+    # where two users submitted the same brand-new client-supplied session_id.
     cursor.execute(
         """
         INSERT INTO chat_sessions (session_id, owner_user_id)
@@ -36,9 +47,14 @@ def _ensure_session(cursor, session_id: str, owner_user_id: int | None = None) -
         DO UPDATE SET
             updated_at = now(),
             owner_user_id = COALESCE(chat_sessions.owner_user_id, EXCLUDED.owner_user_id)
+        RETURNING owner_user_id
         """,
         (session_id, owner_user_id),
     )
+    stored_owner = cursor.fetchone()[0]
+    if owner_user_id is not None and stored_owner is not None and stored_owner != owner_user_id:
+        raise SessionOwnershipError("Session belongs to another user.")
+    return stored_owner
 
 
 def initialize_chat_memory() -> None:
