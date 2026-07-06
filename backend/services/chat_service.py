@@ -623,7 +623,7 @@ async def stream_chat_reply(
         token   {"delta": "..."}            incremental answer text
         sources {"sources": [Source, ...]}  citations (emitted once, after tokens)
         done    <ChatResponse envelope>     final answer/status/latency
-        error   {"code","message","detail"} a failure; terminal
+        error   {"error": {"code","message","detail"}}  a failure; terminal (matches REST envelope)
 
     Graceful non-answers (refused/blocked/no_results) emit a single ``done`` with
     that status and NO token events.
@@ -645,9 +645,9 @@ async def stream_chat_reply(
 
     try:
         if not message.strip():
-            yield {"event": "error", "data": {
+            yield {"event": "error", "data": {"error": {
                 "code": "validation_error", "message": "Message cannot be empty.", "detail": None,
-            }}
+            }}}
             return
 
         formatted_history = _prepare_history(session_id)
@@ -791,9 +791,9 @@ async def stream_chat_reply(
 
     except Exception:
         logger.exception("Streaming chat failed for session %s", session_id)
-        yield {"event": "error", "data": {
+        yield {"event": "error", "data": {"error": {
             "code": "internal_error", "message": "An unexpected error occurred.", "detail": None,
-        }}
+        }}}
     finally:
         emit_request_trace(
             query=message,
