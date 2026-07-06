@@ -57,12 +57,16 @@ def test_hr_agent_no_longer_exposes_whos_out():
 
 
 def test_calendar_agent_whos_out_invokes_through_registry():
-    # The no-arg read passes the registry's RBAC re-check + validate path and
-    # returns the seeded team OOO view.
+    # An explicit window (independent of the wall clock) passes the registry's RBAC
+    # re-check + arg-schema validation and returns the seeded team OOO view.
     cal = _by_name(build_specialists())["calendar-agent"]
-    result = cal.registry.invoke("whos_out", {}, EMPLOYEE)
+    result = cal.registry.invoke(
+        "whos_out", {"start_date": "2026-07-01", "end_date": "2026-07-31"}, EMPLOYEE)
     assert result.status == "ok"
     assert len(result.data["out"]) >= 1
+    # Display-safe only — no private calendar fields reach the tool result.
+    for row in result.data["out"]:
+        assert set(row) == {"name", "until"}
 
 
 def test_policy_agent_registry_has_no_tools():
