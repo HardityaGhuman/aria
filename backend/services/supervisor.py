@@ -27,7 +27,11 @@ _SPECIALISTS = build_specialists()
 _POLICY_AGENT = next(s for s in _SPECIALISTS if s.name == "policy-agent")
 
 # Domain label (from classify_query) → specialist name.
-_ROUTE = {"hr": "hr-agent", "policy": "policy-agent"}
+# INTERIM (§4.2): `calendar` is routed to the hr-agent because the whos_out tool
+# still lives in the hr-agent's registry today. §5.3 creates a dedicated
+# calendar-agent, moves whos_out onto it, and repoints this entry — until then this
+# keeps live "who is out" queries reaching whos_out instead of falling back to RAG.
+_ROUTE = {"hr": "hr-agent", "calendar": "hr-agent", "policy": "policy-agent"}
 
 
 def route(classification: str, principal, specialists: list[Specialist] | None = None) -> Specialist:
