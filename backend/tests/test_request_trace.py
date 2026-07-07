@@ -5,13 +5,17 @@ import json
 import logging
 
 from backend.services import chat_service
+from backend.services import read_pipeline
 
 
 def _drive(monkeypatch, classification, answer="An answer.", sources=None):
-    monkeypatch.setattr(chat_service, "_prepare_history", lambda sid: [])
-    monkeypatch.setattr(chat_service, "classify_query", lambda *a, **k: classification)
+    # Shared-pipeline deps live on read_pipeline now; the answer model + persistence
+    # stay on the chat_service transport. The rollup itself is still emitted by the
+    # transport, which is what these tests assert.
+    monkeypatch.setattr(read_pipeline, "_prepare_history", lambda sid: [])
+    monkeypatch.setattr(read_pipeline, "classify_query", lambda *a, **k: classification)
     monkeypatch.setattr(chat_service, "append_exchange", lambda *a, **k: None)
-    monkeypatch.setattr(chat_service, "_preferences_note", lambda uid: None)
+    monkeypatch.setattr(read_pipeline, "_preferences_note", lambda uid: None)
 
     class _Retrieved:
         status = "ok"
@@ -21,11 +25,11 @@ def _drive(monkeypatch, classification, answer="An answer.", sources=None):
         {"source": "hr/employment-basics.md", "distance": 0.2, "section": "x", "access_tier": "all"}
     ]
     _Retrieved.sources = rsources
-    monkeypatch.setattr(chat_service, "retrieve_context", lambda *a, **k: _Retrieved)
-    monkeypatch.setattr(chat_service, "rewrite_query", lambda *a, **k: "q")
+    monkeypatch.setattr(read_pipeline, "retrieve_context", lambda *a, **k: _Retrieved)
+    monkeypatch.setattr(read_pipeline, "rewrite_query", lambda *a, **k: "q")
     monkeypatch.setattr(chat_service, "get_llm_response", lambda *a, **k: answer)
-    monkeypatch.setattr(chat_service, "get_meta_response", lambda *a, **k: answer)
-    monkeypatch.setattr(chat_service, "get_chitchat_response", lambda *a, **k: answer)
+    monkeypatch.setattr(read_pipeline, "get_meta_response", lambda *a, **k: answer)
+    monkeypatch.setattr(read_pipeline, "get_chitchat_response", lambda *a, **k: answer)
 
 
 def test_policy_request_emits_one_rollup(monkeypatch, caplog):

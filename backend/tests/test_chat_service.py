@@ -6,7 +6,7 @@ Unit tests for backend.services.chat_service.
 import asyncio
 
 import backend.services.chat_service as cs
-from backend.rag.schema import RetrievedContext
+import backend.services.read_pipeline as rp
 
 
 # --- Fix 2: the out-of-scope refusal must honor the user's language ---
@@ -67,19 +67,10 @@ def test_sentinel_detected():
     assert not cs._is_no_context_sentinel("You get 20 PTO days.")
 
 
-def test_policy_sentinel_reply_returns_localized_no_results_without_sources(monkeypatch):
-    monkeypatch.setattr(cs, "_resolve_search_query",
-                        lambda message, history: asyncio.sleep(0, result=message))
-    monkeypatch.setattr(cs, "retrieve_context",
-                        lambda *a, **k: RetrievedContext("ctx", sources=[{"file": "x"}], status="ok"))
-    monkeypatch.setattr(cs, "get_llm_response", lambda *a, **k: cs.NO_CONTEXT_SENTINEL)
-
-    result = asyncio.run(cs._answer_policy_query(
-        "what is the moon made of", [], ["all"], ["global"], preferences=None, language="Hindi"))
-    assert result.status == "no_results"
-    assert result.sources == []
-    assert result.reply == cs._localized_no_results("Hindi")
-    assert cs.NO_CONTEXT_SENTINEL not in result.reply
+# NOTE: the grounded-answer behaviors formerly tested here through
+# `_answer_policy_query` (sentinel → localized no_results, blocked confidential,
+# rephrase directive, tool-note folding) moved with that logic into the shared
+# read pipeline. They are now covered in tests/test_read_pipeline.py.
 
 
 # --- Fix 4: a rephrase request must vary the answer, not copy-paste it ---
@@ -100,74 +91,22 @@ def test_is_rephrase_request_passes_fresh_questions():
         assert not cs._is_rephrase_request(msg), msg
 
 
-def test_rephrase_followup_calls_llm_with_directive_and_temperature(monkeypatch):
-    monkeypatch.setattr(cs, "_resolve_search_query",
-                        lambda message, history: asyncio.sleep(0, result=message))
-    monkeypatch.setattr(cs, "retrieve_context",
-                        lambda *a, **k: RetrievedContext("ctx", sources=[{"file": "x"}], status="ok"))
-
-    captured = {}
-
-    def _fake_llm(*a, **k):
-        captured.update(k)
-        return "a clearer answer"
-    monkeypatch.setattr(cs, "get_llm_response", _fake_llm)
-
-    history = [{"role": "user", "content": "remote work?"},
-               {"role": "assistant", "content": "earlier answer"}]
-    result = asyncio.run(cs._answer_policy_query(
-        "explain it in better terms", history, ["all"], ["global"], preferences=None))
-
-    assert result.status == "ok"
-    assert captured["extra_directive"]
-    assert captured["temperature"] > 0
-
-
-def test_first_message_is_not_treated_as_rephrase(monkeypatch):
-    monkeypatch.setattr(cs, "_resolve_search_query",
-                        lambda message, history: asyncio.sleep(0, result=message))
-    monkeypatch.setattr(cs, "retrieve_context",
-                        lambda *a, **k: RetrievedContext("ctx", sources=[{"file": "x"}], status="ok"))
-    captured = {}
-    monkeypatch.setattr(cs, "get_llm_response",
-                        lambda *a, **k: captured.update(k) or "answer")
-
-    # "elaborate" with NO prior assistant turn must not trigger re-explain.
-    asyncio.run(cs._answer_policy_query("elaborate", [], ["all"], ["global"], preferences=None))
-    assert not captured.get("extra_directive")
-    assert captured.get("temperature", 0) == 0
-
-
 def test_filler_message_clarifies_without_classify_or_retrieval(monkeypatch):
-    monkeypatch.setattr(cs, "_prepare_history", lambda session_id: [])
-    monkeypatch.setattr(cs, "_user_language", lambda uid: "English")
+    # The filler short-circuit lives in the pipeline now; patch its deps there. The
+    # transport still owns persistence, so append_exchange is patched on cs.
+    monkeypatch.setattr(rp, "_prepare_history", lambda session_id: [])
+    monkeypatch.setattr(rp, "_user_language", lambda uid: "English")
     monkeypatch.setattr(cs, "append_exchange", lambda *a, **k: None)
 
     def _boom_classify(*a, **k):
         raise AssertionError("classify must not run on filler")
-    monkeypatch.setattr(cs, "classify_query", _boom_classify)
+    monkeypatch.setattr(rp, "classify_query", _boom_classify)
 
     def _boom_retrieve(*a, **k):
         raise AssertionError("retrieval must not run on filler")
-    monkeypatch.setattr(cs, "retrieve_context", _boom_retrieve)
+    monkeypatch.setattr(rp, "retrieve_context", _boom_retrieve)
 
     result = asyncio.run(cs.generate_chat_reply("sess", "umm", owner_user_id=1))
     assert result.reply == cs.CLARIFY_MESSAGE
     assert result.status == "no_results"
     assert result.sources == []
-
-
-def test_blocked_retrieval_returns_confidential_message_without_llm(monkeypatch):
-    monkeypatch.setattr(cs, "retrieve_context",
-                        lambda *a, **k: RetrievedContext("", status="blocked", blocked_contact="HR"))
-
-    def _boom(*a, **k):
-        raise AssertionError("LLM must not be called on a blocked topic")
-    monkeypatch.setattr(cs, "get_llm_response", _boom)
-    monkeypatch.setattr(cs, "_resolve_search_query",
-                        lambda message, history: asyncio.sleep(0, result=message))
-
-    result = asyncio.run(cs._answer_policy_query("what are L5 salary bands", [], ["all"], ["global", "us"]))
-    assert "HR" in result.reply
-    assert "confidential" in result.reply.lower() or "restricted" in result.reply.lower()
-    assert result.sources == [] and result.context_used == ""
