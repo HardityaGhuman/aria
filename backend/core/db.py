@@ -26,6 +26,19 @@ from backend.core.config import DATABASE_URL
 _pool: ConnectionPool | None = None
 
 
+def _configure_connection(conn) -> None:
+    """Adapt Python ``list[float]`` ↔ pgvector ``vector`` on every pooled conn.
+    Best-effort: on first boot (before ``CREATE EXTENSION``) the type does not
+    exist yet, so registration fails silently; ``ensure_vector_extension()``
+    re-registers on all pooled connections right after creating the extension."""
+    try:
+        # pyrefly: ignore [missing-import]
+        from pgvector.psycopg import register_vector
+        register_vector(conn)
+    except Exception:
+        pass
+
+
 def get_pool() -> ConnectionPool:
     """The process-wide pool, opened lazily on first use."""
     global _pool
@@ -37,6 +50,7 @@ def get_pool() -> ConnectionPool:
             # Recycle idle connections so a serverless/proxy idle-timeout can't
             # hand back a dead socket.
             max_idle=float(os.getenv("DB_POOL_MAX_IDLE", "300")),
+            configure=_configure_connection,
             open=True,
         )
     return _pool
