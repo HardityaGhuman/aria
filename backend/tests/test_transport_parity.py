@@ -39,6 +39,8 @@ def _patch(monkeypatch, classification, retrieved):
 
 def _sync(message):
     r = asyncio.run(cs.generate_chat_reply("s", message, ["all"], ["global"], owner_user_id=1))
+    # The sync client-facing sources are the route's mapped view of the raw dicts;
+    # map here so we compare like-for-like against the stream's (already-mapped) done.
     return r.status, cs.to_source_dicts(r.sources), r.reply
 
 
