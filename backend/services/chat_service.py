@@ -26,13 +26,17 @@ from backend.core.chat_memory import (
     SessionOwnershipError,
     append_exchange,
 )
-from backend.core.config import RETRIEVAL_STRATEGY
-from backend.core.control.models import TerminalState, envelope_status_for
+from backend.core.control.models import (
+    RequestOutcome,
+    SourceRef,
+    TerminalState,
+    envelope_status_for,
+)
 from backend.core.errors import AppError
 from backend.core.llm import get_llm_response, stream_llm_response
 from backend.core.logging import get_logger
 from backend.core.tools.principal import Principal
-from backend.core.trace import emit_request_trace, reset_trace, start_trace
+from backend.core.trace import reset_trace, start_trace
 
 # Re-exported so `chat_service.<name>` keeps resolving for routes and tests. These are
 # the shared pipeline's public surface: the source mapper the route reuses, the
@@ -52,7 +56,6 @@ from backend.services.read_pipeline import (  # noqa: F401  (re-export)
     _localized_clarify,
     _localized_no_results,
     _localized_refusal,
-    _retrieved_meta,
     _run_blocking,
     finalize_answer,
     prepare_read,
@@ -70,6 +73,24 @@ class ChatResult:
     # ok | partial | no_results | blocked | refused | tool_unavailable | error —
     # surfaced in the response envelope so the client branches on outcome, not prose.
     status: str = "ok"
+
+
+def _source_refs(source_dicts: list[dict]) -> tuple[SourceRef, ...]:
+    """Envelope-shaped source dicts → the frozen `SourceRef` tuple a `RequestOutcome`
+    carries into its trace. Ids/labels only; no document body ever enters the trace."""
+    return tuple(
+        SourceRef(
+            document_id=s["document_id"], file=s["file"],
+            section=s.get("section"), source_type=s.get("source_type"),
+        )
+        for s in source_dicts
+    )
+
+
+# Terminal states whose grounded answer stands on retrieved evidence, so the reply
+# carries context + sources. PARTIAL (policy-only when a tool was down) still cites the
+# policy it used; every non-answer terminal carries none.
+_GROUNDED_TERMINALS = (TerminalState.OK, TerminalState.PARTIAL)
 
 
 async def _generate_grounded_answer(prepared) -> str:
@@ -106,8 +127,8 @@ async def generate_chat_reply(
     """
     token = start_trace(owner_user_id, session_id)
     started = time.perf_counter()
-    classification = ""
     result: ChatResult | None = None
+    prepared = None
     try:
         if not message.strip():
             # Uniform envelope (matches the streaming path) so the client sees one
@@ -119,48 +140,88 @@ async def generate_chat_reply(
             allowed_tiers=allowed_tiers, allowed_regions=allowed_regions,
             owner_user_id=owner_user_id,
         )
-        classification = prepared.classification
 
-        if prepared.streamable:
+        # §6a: an error-terminal (INVALID_PLAN, INTERNAL_ERROR, etc.) can't ride the
+        # ChatResponse status Literal (it only allows the 6 client-facing values), so
+        # surface it as a structured AppError the route maps to a JSON error body.
+        if not prepared.streamable:
+            status = envelope_status_for(prepared.terminal)
+            if status == "error":
+                raise AppError(
+                    "internal_error",
+                    prepared.answer or "The request could not be processed.",
+                    status_code=500,
+                )
+            result = ChatResult(
+                prepared.answer, "", [],
+                status=status,
+            )
+        else:
+            if prepared.tracer:
+                prepared.tracer.answer_started()
+            ans_started = time.perf_counter()
             reply = await _generate_grounded_answer(prepared)
+            if prepared.tracer:
+                prepared.tracer.answer_completed(
+                    latency_ms=int((time.perf_counter() - ans_started) * 1000),
+                    source_count=len(prepared.sources)
+                )
             final = finalize_answer(prepared, reply)
-            grounded = final.terminal is TerminalState.OK
+            grounded = final.terminal in _GROUNDED_TERMINALS
+            # ChatResult.sources holds the RAW retriever dicts; the boundary (route +
+            # persist + trace) maps them through `to_source_dicts` (which also drops
+            # malformed §6c cites). Keeping raw here matches the streaming `done` event
+            # once mapped, and the `_retrieved_meta` rollup which reads raw scores.
             result = ChatResult(
                 final.answer,
                 prepared.context if grounded else "",
                 prepared.sources if grounded else [],
                 status=envelope_status_for(final.terminal),
             )
-        else:
-            result = ChatResult(
-                prepared.answer, "", [],
-                status=envelope_status_for(prepared.terminal),
-            )
 
         try:
-            # Persist citations only for a grounded answer, in the same Source shape
-            # the client receives.
-            persisted_sources = to_source_dicts(result.sources) if result.status == "ok" else []
+            # Persist citations for a grounded answer (ok or a policy-only partial), in
+            # the same Source shape the client receives.
+            persisted_sources = (
+                to_source_dicts(result.sources)
+                if result.status in ("ok", "partial") else []
+            )
             append_exchange(
                 session_id, message, result.reply,
                 owner_user_id=owner_user_id, sources=persisted_sources,
             )
+            if prepared.tracer:
+                prepared.tracer.exchange_persisted()
         except SessionOwnershipError as e:
             # Lost the race to claim a brand-new session_id another user just took.
             raise HTTPException(status_code=403, detail=e.message)
         except ChatMemoryError as e:
             raise HTTPException(status_code=503, detail=e.message)
 
+        if prepared.tracer:
+            term = final.terminal if prepared.streamable else prepared.terminal
+            prepared.tracer.request_completed(RequestOutcome(
+                terminal_state=term,
+                answer=result.reply,
+                sources=_source_refs(to_source_dicts(result.sources)),
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            ))
         return result
+    except AppError as e:
+        if prepared and prepared.tracer:
+            term = prepared.terminal if prepared.terminal else TerminalState.INTERNAL_ERROR
+            prepared.tracer.request_failed(term, error_code=e.code)
+        raise
+    except HTTPException as e:
+        if prepared and prepared.tracer:
+            term = prepared.terminal if prepared.terminal else TerminalState.INTERNAL_ERROR
+            prepared.tracer.request_failed(term, error_code=str(e.status_code))
+        raise
+    except Exception as e:
+        if prepared and prepared.tracer:
+            prepared.tracer.request_failed(TerminalState.INTERNAL_ERROR, error_code="unexpected_error")
+        raise
     finally:
-        emit_request_trace(
-            query=message,
-            classification=classification,
-            strategy=RETRIEVAL_STRATEGY,
-            retrieved=_retrieved_meta(result.sources) if result else [],
-            status=result.status if result else "error",
-            total_latency_ms=int((time.perf_counter() - started) * 1000),
-        )
         reset_trace(token)
 
 
@@ -186,15 +247,18 @@ async def _persist_quietly(
     answer: str,
     owner_user_id: int | None = None,
     sources: list[dict] | None = None,
-) -> None:
+) -> bool:
     """Persist the exchange after the answer is already streamed. A memory error here
-    must not corrupt a response the client has fully received — log, don't raise."""
+    must not corrupt a response the client has fully received — log, don't raise.
+    Returns True if persisted successfully."""
     try:
         await asyncio.to_thread(
             append_exchange, session_id, message, answer, owner_user_id, sources
         )
+        return True
     except Exception:
         logger.exception("Failed to persist streamed exchange for session %s", session_id)
+        return False
 
 
 async def stream_chat_reply(
@@ -219,9 +283,7 @@ async def stream_chat_reply(
     """
     token = start_trace(owner_user_id, session_id)
     started = time.perf_counter()
-    final_status = "error"
-    classification = ""
-    retrieved_meta: list[dict] = []
+    prepared = None
 
     def _envelope(answer: str, sources: list[dict], status: str) -> dict:
         return {
@@ -244,23 +306,40 @@ async def stream_chat_reply(
             allowed_tiers=allowed_tiers, allowed_regions=allowed_regions,
             owner_user_id=owner_user_id,
         )
-        classification = prepared.classification
 
         # --- fixed-answer branches (no answer model) --------------------------
         if not prepared.streamable:
             final_status = envelope_status_for(prepared.terminal)
+            # §6a: error-terminals (INVALID_PLAN, etc.) surface as an SSE error event,
+            # not a done — they can't ride the ChatResponse status Literal.
+            if final_status == "error":
+                if prepared.tracer:
+                    prepared.tracer.request_failed(prepared.terminal, error_code="internal_error")
+                yield {"event": "error", "data": {"error": {
+                    "code": "internal_error",
+                    "message": prepared.answer or "The request could not be processed.",
+                    "detail": None,
+                }}}
+                return
             answer = prepared.answer
             if prepared.sse_speaks:
                 yield {"event": "token", "data": {"delta": answer}}
             if prepared.sse_emits_empty_sources:
                 yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(answer, [], final_status)}
-            await _persist_quietly(session_id, message, answer, owner_user_id)
+            persisted = await _persist_quietly(session_id, message, answer, owner_user_id)
+            if prepared.tracer:
+                if persisted:
+                    prepared.tracer.exchange_persisted()
+                prepared.tracer.request_completed(RequestOutcome(
+                    terminal_state=prepared.terminal,
+                    answer=answer,
+                    sources=(),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                ))
             return
 
         # --- grounded path: stream the answer ---------------------------------
-        retrieved_meta = _retrieved_meta(prepared.sources)
-
         # Emit the reserved tool events for whatever the specialist gathered.
         for entry in prepared.tool_results:
             yield {"event": "tool_call", "data": {"name": entry["name"]}}
@@ -268,6 +347,9 @@ async def stream_chat_reply(
                 "name": entry["name"], "status": entry["result"].status}}
 
         ar = prepared.answer_req
+        if prepared.tracer:
+            prepared.tracer.answer_started()
+        ans_started = time.perf_counter()
         token_iter = stream_llm_response(
             ar.message, ar.context, ar.history, ar.preferences,
             extra_directive=ar.directive, temperature=ar.temperature,
@@ -294,6 +376,12 @@ async def stream_chat_reply(
             gate_open = True
             yield {"event": "token", "data": {"delta": full_answer}}
 
+        if prepared.tracer:
+            prepared.tracer.answer_completed(
+                latency_ms=int((time.perf_counter() - ans_started) * 1000),
+                source_count=len(prepared.sources)
+            )
+
         final = finalize_answer(prepared, full_answer)
         final_status = envelope_status_for(final.terminal)
 
@@ -303,26 +391,38 @@ async def stream_chat_reply(
             yield {"event": "token", "data": {"delta": final.answer}}
             yield {"event": "sources", "data": {"sources": []}}
             yield {"event": "done", "data": _envelope(final.answer, [], final_status)}
-            await _persist_quietly(session_id, message, final.answer, owner_user_id, [])
+            persisted = await _persist_quietly(session_id, message, final.answer, owner_user_id, [])
+            if prepared.tracer:
+                if persisted:
+                    prepared.tracer.exchange_persisted()
+                prepared.tracer.request_completed(RequestOutcome(
+                    terminal_state=final.terminal,
+                    answer=final.answer,
+                    sources=(),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                ))
         else:
             # Any answer text already reached the client; only its status/sources can
             # be corrected now (an ungrounded reply gets empty sources via finalize).
             yield {"event": "sources", "data": {"sources": final.sources}}
             yield {"event": "done", "data": _envelope(full_answer, final.sources, final_status)}
-            await _persist_quietly(session_id, message, full_answer, owner_user_id, final.sources)
+            persisted = await _persist_quietly(session_id, message, full_answer, owner_user_id, final.sources)
+            if prepared.tracer:
+                if persisted:
+                    prepared.tracer.exchange_persisted()
+                prepared.tracer.request_completed(RequestOutcome(
+                    terminal_state=final.terminal,
+                    answer=full_answer,
+                    sources=_source_refs(final.sources),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                ))
 
     except Exception:
         logger.exception("Streaming chat failed for session %s", session_id)
+        if prepared and prepared.tracer:
+            prepared.tracer.request_failed(TerminalState.INTERNAL_ERROR, error_code="internal_error")
         yield {"event": "error", "data": {"error": {
             "code": "internal_error", "message": "An unexpected error occurred.", "detail": None,
         }}}
     finally:
-        emit_request_trace(
-            query=message,
-            classification=classification,
-            strategy=RETRIEVAL_STRATEGY,
-            retrieved=retrieved_meta,
-            status=final_status,
-            total_latency_ms=int((time.perf_counter() - started) * 1000),
-        )
         reset_trace(token)

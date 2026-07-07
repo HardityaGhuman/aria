@@ -32,6 +32,13 @@ _POLICY_AGENT = next(s for s in _SPECIALISTS if s.name == "policy-agent")
 _ROUTE = {"hr": "hr-agent", "calendar": "calendar-agent", "policy": "policy-agent"}
 
 
+def list_specialists() -> list[Specialist]:
+    """The three isolated specialists, for the planner's validation step. `validate_plan`
+    needs the live specialist set to confirm a plan's specialist exists, is reachable,
+    and owns its tools — this is the single seam it reads them through."""
+    return list(_SPECIALISTS)
+
+
 def route(classification: str, principal, specialists: list[Specialist] | None = None) -> Specialist:
     """Map a classification label to exactly one specialist. Falls back to the
     Policy-agent when the label is unmapped OR the caller's role can't reach the
@@ -45,13 +52,36 @@ def route(classification: str, principal, specialists: list[Specialist] | None =
     return chosen
 
 
+def _leave_balance_note_safe(result) -> bool:
+    """§6b / canonical §7 — a `leave_balance` result may assert a live balance only if
+    its numbers hold up. The honest no-record shape (`remaining is None`) is fine; any
+    other shape must carry numeric, non-negative total/used/remaining. A garbage HRIS
+    payload (negative, non-numeric, missing) must NOT fold into the trusted note where
+    it would be stated as fact — we drop the line instead of asserting a false balance.
+    (`bool` is a subclass of `int`; reject it so a `True` can't pose as a day count.)"""
+    data = getattr(result, "data", None)
+    if not isinstance(data, dict):
+        return False
+    if data.get("remaining") is None:
+        return True  # valid "no record on file" result
+    for key in ("total", "used", "remaining"):
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            return False
+    return True
+
+
 def build_tool_note(tool_results: list[dict]) -> str | None:
     """Fold gathered tool outputs into a TRUSTED data note (template-built from the
     ToolResult.summary strings — typed, server-built text, never raw external text —
-    so it may carry authority above the fenced doc context). None ⇒ nothing gathered."""
+    so it may carry authority above the fenced doc context). None ⇒ nothing gathered.
+    A `leave_balance` result whose numbers fail validation is skipped (§6b): a bad
+    numeric payload must never be stated to the user as a live balance."""
     lines = []
     for entry in tool_results:
         result = entry.get("result")
+        if entry.get("name") == "leave_balance" and not _leave_balance_note_safe(result):
+            continue
         summary = getattr(result, "summary", None)
         if summary:
             lines.append(f"- {entry.get('name')}: {summary}")

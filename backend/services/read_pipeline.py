@@ -21,11 +21,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 # pyrefly: ignore [missing-import]
 from fastapi import HTTPException
 
+from backend.core import trace
 from backend.core.chat_memory import (
     ChatMemoryError,
     delete_messages_before_id,
@@ -37,8 +39,16 @@ from backend.core.config import (
     LLM_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
+    RETRIEVAL_STRATEGY,
 )
-from backend.core.control.models import ReadPlan, TerminalState
+from backend.core.control.models import (
+    ReadPlan,
+    RequestContext,
+    StepResult,
+    TerminalState,
+)
+from backend.core.control.policies import on_hris_transient_failure
+from backend.core.control.tracing import BoundaryTracer
 from backend.core.errors import AppError
 from backend.core.llm import (
     classify_query,
@@ -55,8 +65,8 @@ from backend.core.preferences import (
 )
 from backend.core.tools.principal import Principal
 from backend.rag import retrieve_context, rewrite_query
-from backend.services.read_planner import build_plan
-from backend.services.supervisor import route, run_specialist
+from backend.services.read_planner import build_plan, validate_plan
+from backend.services.supervisor import list_specialists, route, run_specialist
 
 logger = get_logger(__name__)
 
@@ -266,10 +276,17 @@ def _grounding_status(reply: str) -> str:
 # ---------------------------------------------------------------------------
 def to_source_dicts(raw_sources: list[dict]) -> list[dict]:
     """Map the retriever's per-chunk dicts onto the frozen Source shape used in the
-    response envelope (document_id/file/section/source_type)."""
+    response envelope (document_id/file/section/source_type).
+
+    §6c citation validation: a chunk with no `source` (empty document_id) is malformed
+    — it can't be cited (nothing to name, nothing the viewer could open), so it is
+    dropped here before it can ride an `ok` completion. This is the single mapping the
+    envelope, persistence, and trace all pass through, so the drop is consistent."""
     out = []
     for item in raw_sources:
         document_id = item.get("source", "")
+        if not document_id:
+            continue
         out.append({
             "document_id": document_id,
             "file": os.path.basename(document_id),
@@ -421,6 +438,14 @@ class PreparedRead:
     answer_req: AnswerRequest | None = None
     tool_results: list[dict] = field(default_factory=list)
     language: str = "English"
+    # §6a: the per-request boundary tracer, created in prepare_read. The transports
+    # reuse it to emit the lifecycle-end events (answer_completed / request_completed /
+    # request_failed / exchange_persisted) they alone know the timing of.
+    tracer: BoundaryTracer | None = None
+    # §6b: an HR request whose live gather failed but that still has policy evidence.
+    # The answer streams from policy alone; finalize settles it to PARTIAL, never a
+    # silent OK, so the client learns the balance couldn't be read.
+    forced_partial: bool = False
 
     @property
     def is_terminal(self) -> bool:
@@ -469,8 +494,13 @@ def finalize_answer(prepared: PreparedRead, full_answer: str) -> FinalizedAnswer
             TerminalState.NO_RESULTS, _localized_no_results(prepared.language), [])
     if status == "refused":
         return FinalizedAnswer(TerminalState.REFUSED, full_answer, [])
-    return FinalizedAnswer(
-        TerminalState.OK, full_answer, to_source_dicts(prepared.sources))
+    # A grounded reply. §6b: if the live gather failed on an HR request, the model
+    # answered from policy alone — a real but incomplete answer → PARTIAL, still citing
+    # the policy evidence it stands on. Otherwise a normal OK.
+    sources = to_source_dicts(prepared.sources)
+    if prepared.forced_partial:
+        return FinalizedAnswer(TerminalState.PARTIAL, full_answer, sources)
+    return FinalizedAnswer(TerminalState.OK, full_answer, sources)
 
 
 async def prepare_read(
@@ -485,6 +515,22 @@ async def prepare_read(
     """Run every shared step and return a typed `PreparedRead`. Assumes `message` is
     non-empty (the transport rejects an empty body with a uniform validation error
     before calling). Never runs the final grounded answer model."""
+    # §6a: one boundary tracer per request. It reads the ambient trace_id the transport
+    # set with start_trace, so it needs no threading. `request_received` requires a
+    # typed Principal (RequestContext), so it only fires on an authenticated call.
+    tracer = BoundaryTracer()
+    if principal is not None:
+        ctx = trace.current_trace()
+        tracer.request_received(RequestContext(
+            trace_id=ctx.trace_id if ctx else "",
+            principal=principal,
+            session_id=session_id,
+            message=message,
+            intent="",  # not yet classified — this is the first boundary
+            allowed_tiers=tuple(allowed_tiers or ()),
+            allowed_regions=tuple(allowed_regions or ()),
+        ))
+
     formatted_history = await _prepare_history_async(session_id)
 
     # Bare filler ("umm", "idk") carries no question — clarify before spending a
@@ -499,6 +545,7 @@ async def prepare_read(
             terminal=TerminalState.NO_RESULTS,
             answer=_localized_clarify(language),
             language=language,
+            tracer=tracer,
         )
 
     classification = await _run_blocking(
@@ -508,14 +555,29 @@ async def prepare_read(
         timeout_detail="The language model timed out while classifying the request. Please try again.",
     )
 
+    tracer.intent_classified(classification)
     plan = build_plan(classification)
+    tracer.plan_built(plan)
+
+    # §6a: validate the typed plan BEFORE anything executes — but only on an
+    # authenticated call, since validation needs a Principal to check specialist/tool
+    # reachability. An invalid plan terminates the request in `invalid_plan` (which the
+    # transports surface as an opaque error, never a ChatResponse status).
+    if principal is not None:
+        outcome = validate_plan(plan, principal, list_specialists())
+        tracer.plan_validated(outcome)
+        if not outcome.valid:
+            return PreparedRead(
+                classification=classification, plan=plan, streamable=False,
+                terminal=TerminalState.INVALID_PLAN, answer=None, tracer=tracer,
+            )
 
     if classification == "out_of_scope":
         language = await asyncio.to_thread(_user_language, owner_user_id)
         return PreparedRead(
             classification=classification, plan=plan, streamable=False,
             terminal=TerminalState.REFUSED, answer=_localized_refusal(language),
-            language=language,
+            language=language, tracer=tracer,
         )
 
     if classification == "chitchat":
@@ -527,7 +589,7 @@ async def prepare_read(
         )
         return PreparedRead(
             classification=classification, plan=plan, streamable=False,
-            terminal=TerminalState.OK, answer=reply,
+            terminal=TerminalState.OK, answer=reply, tracer=tracer,
         )
 
     if classification == "meta":
@@ -539,18 +601,27 @@ async def prepare_read(
         )
         return PreparedRead(
             classification=classification, plan=plan, streamable=False,
-            terminal=TerminalState.OK, answer=reply,
+            terminal=TerminalState.OK, answer=reply, tracer=tracer,
         )
 
     # --- grounded path: policy / hr / calendar --------------------------------
+    tracer.specialist_selected(plan.specialist)
     pref_note = await asyncio.to_thread(_preferences_note, owner_user_id)
     language = await asyncio.to_thread(_user_language, owner_user_id)
 
     search_query = await _resolve_search_query(message, formatted_history)
+    tracer.retrieval_started(RETRIEVAL_STRATEGY)
+    retr_started = time.perf_counter()
     retrieved = await asyncio.to_thread(
         retrieve_context, search_query,
         allowed_tiers=allowed_tiers, allowed_regions=allowed_regions,
     )
+    tracer.retrieval_completed(StepResult(
+        kind="retrieval", name=RETRIEVAL_STRATEGY,
+        status=getattr(retrieved, "status", "ok") or "ok",
+        latency_ms=int((time.perf_counter() - retr_started) * 1000),
+        meta={"count": len(retrieved.sources)},
+    ))
 
     if retrieved.status == "blocked":
         contact = retrieved.blocked_contact or "HR"
@@ -558,6 +629,7 @@ async def prepare_read(
             classification=classification, plan=plan, streamable=False,
             terminal=TerminalState.BLOCKED,
             answer=CONFIDENTIAL_MESSAGE.format(contact=contact), language=language,
+            tracer=tracer,
         )
 
     if not retrieved.sources:
@@ -565,6 +637,7 @@ async def prepare_read(
             classification=classification, plan=plan, streamable=False,
             terminal=TerminalState.NO_RESULTS,
             answer=_localized_no_results(language), language=language,
+            tracer=tracer,
         )
 
     # Hierarchical routing: delegate to ONE specialist over its scoped registry and
@@ -572,11 +645,27 @@ async def prepare_read(
     # failure ⇒ tool_note is None and the call is today's pure-RAG path.
     tool_note = None
     tool_results: list[dict] = []
+    forced_partial = False
     if principal is not None:
         specialist = route(classification, principal)
         spec_result = await run_specialist(specialist, message, formatted_history, principal)
         tool_note = spec_result.tool_note
         tool_results = spec_result.tool_results
+        for entry in tool_results:
+            tracer.tool_selected(entry["name"])
+            res = entry.get("result")
+            tracer.tool_completed(StepResult(
+                kind="tool", name=entry["name"],
+                status=getattr(res, "status", "unknown") or "unknown", latency_ms=0,
+            ))
+
+        # §6b: an HR request whose live gather failed still has policy evidence here
+        # (we returned no_results above if it didn't). Deterministic policy: the single
+        # retry is spent, so degrade to a policy-only PARTIAL rather than a silent OK.
+        # tool_note stays None, so the answer never asserts a live balance.
+        if classification == "hr" and spec_result.status == "gather_failed":
+            decision = on_hris_transient_failure(attempt=1, can_answer_from_policy=True)
+            forced_partial = decision.terminal is TerminalState.PARTIAL
 
     extra_directive, temperature = _rephrase_adjustments(message, formatted_history)
     combined_directive = "\n\n".join(d for d in (tool_note, extra_directive) if d) or None
@@ -589,4 +678,5 @@ async def prepare_read(
             message=message, context=retrieved.text, history=formatted_history,
             preferences=pref_note, directive=combined_directive, temperature=temperature,
         ),
+        tracer=tracer, forced_partial=forced_partial,
     )
