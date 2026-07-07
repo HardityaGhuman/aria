@@ -13,20 +13,29 @@ def _by_name(specialists):
     return {s.name: s for s in specialists}
 
 
-def test_build_specialists_returns_hr_and_policy():
+def test_build_specialists_returns_hr_policy_and_calendar():
     specs = _by_name(build_specialists())
-    assert set(specs) == {"hr-agent", "policy-agent"}
+    assert set(specs) == {"hr-agent", "policy-agent", "calendar-agent"}
     assert specs["hr-agent"].uses_tools is True
     assert specs["policy-agent"].uses_tools is False
+    assert specs["calendar-agent"].uses_tools is True
     assert specs["hr-agent"].min_role == "employee"
     assert specs["policy-agent"].min_role == "employee"
+    assert specs["calendar-agent"].min_role == "employee"
 
 
-def test_hr_agent_registry_is_scoped_to_its_read_tools():
+def test_hr_agent_registry_is_scoped_to_only_leave_balance():
     hr = _by_name(build_specialists())["hr-agent"]
     names = [s["function"]["name"] for s in hr.registry.specs_for(EMPLOYEE)]
-    # HR-agent sees ONLY its own read tools — leave_balance + whos_out, no superset.
-    assert names == ["leave_balance", "whos_out"]
+    # §5.2: HR-agent sees ONLY leave_balance — whos_out moved to the calendar-agent.
+    assert names == ["leave_balance"]
+
+
+def test_calendar_agent_registry_is_scoped_to_only_whos_out():
+    cal = _by_name(build_specialists())["calendar-agent"]
+    names = [s["function"]["name"] for s in cal.registry.specs_for(EMPLOYEE)]
+    # §5.3: calendar-agent sees ONLY whos_out — no leave_balance, no superset.
+    assert names == ["whos_out"]
 
 
 def test_hr_agent_leave_balance_invokes_against_mock_hris():
@@ -41,13 +50,23 @@ def test_hr_agent_leave_balance_invokes_against_mock_hris():
     assert result.data["remaining"] == 20 - 8
 
 
-def test_hr_agent_whos_out_invokes_through_registry():
-    # The no-arg read passes the registry's RBAC re-check + validate path and
-    # returns the seeded team OOO view.
+def test_hr_agent_no_longer_exposes_whos_out():
+    # Registry isolation: whos_out must not be reachable through the hr-agent.
     hr = _by_name(build_specialists())["hr-agent"]
-    result = hr.registry.invoke("whos_out", {}, EMPLOYEE)
+    assert hr.registry.get("whos_out") is None
+
+
+def test_calendar_agent_whos_out_invokes_through_registry():
+    # An explicit window (independent of the wall clock) passes the registry's RBAC
+    # re-check + arg-schema validation and returns the seeded team OOO view.
+    cal = _by_name(build_specialists())["calendar-agent"]
+    result = cal.registry.invoke(
+        "whos_out", {"start_date": "2026-07-01", "end_date": "2026-07-31"}, EMPLOYEE)
     assert result.status == "ok"
     assert len(result.data["out"]) >= 1
+    # Display-safe only — no private calendar fields reach the tool result.
+    for row in result.data["out"]:
+        assert set(row) == {"name", "until"}
 
 
 def test_policy_agent_registry_has_no_tools():

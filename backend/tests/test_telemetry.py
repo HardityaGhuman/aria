@@ -65,6 +65,57 @@ def test_no_document_body_in_span(caplog, monkeypatch):
     assert all(secret not in r.message for r in caplog.records)
 
 
+def _last_request_trace(caplog):
+    recs = [json.loads(r.message) for r in caplog.records if '"request_trace"' in r.message]
+    return recs[-1]
+
+
+def test_raw_query_dropped_when_flag_off(caplog, monkeypatch):
+    monkeypatch.setattr(trace.config, "TELEMETRY_LOG_RAW_QUERY", False)
+    secret = "my SSN is 123-45-6789"
+    token = trace.start_trace(user_id=7, session_id="s")
+    with caplog.at_level(logging.INFO, logger="telemetry"):
+        trace.emit_request_trace(query=secret, classification="policy", status="ok", total_latency_ms=1)
+    trace.reset_trace(token)
+    assert all(secret not in r.message for r in caplog.records)
+    assert _last_request_trace(caplog)["query"] is None
+
+
+def test_raw_query_kept_when_flag_on(caplog, monkeypatch):
+    monkeypatch.setattr(trace.config, "TELEMETRY_LOG_RAW_QUERY", True)
+    token = trace.start_trace(user_id=7, session_id="s")
+    with caplog.at_level(logging.INFO, logger="telemetry"):
+        trace.emit_request_trace(query="what is PTO?", classification="policy", status="ok", total_latency_ms=1)
+    trace.reset_trace(token)
+    assert _last_request_trace(caplog)["query"] == "what is PTO?"
+
+
+def test_ids_pseudonymized_when_flag_on(caplog, monkeypatch):
+    monkeypatch.setattr(trace.config, "TELEMETRY_PSEUDONYMIZE_IDS", True)
+    monkeypatch.setattr(trace.config, "TELEMETRY_ID_SALT", "pepper")
+    token = trace.start_trace(user_id=42, session_id="sess-abc")
+    with caplog.at_level(logging.INFO, logger="telemetry"):
+        trace.emit_request_trace(query="q", classification="policy", status="ok", total_latency_ms=1)
+    trace.reset_trace(token)
+    roll = _last_request_trace(caplog)
+    assert roll["user_id"] != 42 and roll["user_id"].startswith("anon_")
+    assert roll["session_id"] != "sess-abc" and roll["session_id"].startswith("anon_")
+    # stable + never leaks the raw id
+    assert roll["user_id"] == trace._pseudonymize(42)
+    assert all("sess-abc" not in r.message for r in caplog.records)
+
+
+def test_ids_passthrough_when_flag_off(caplog, monkeypatch):
+    monkeypatch.setattr(trace.config, "TELEMETRY_PSEUDONYMIZE_IDS", False)
+    token = trace.start_trace(user_id=42, session_id="sess-abc")
+    with caplog.at_level(logging.INFO, logger="telemetry"):
+        trace.emit_request_trace(query="q", classification="policy", status="ok", total_latency_ms=1)
+    trace.reset_trace(token)
+    roll = _last_request_trace(caplog)
+    assert roll["user_id"] == 42
+    assert roll["session_id"] == "sess-abc"
+
+
 def test_stream_emits_answer_stream_span(caplog, monkeypatch):
     class _StreamUsage:
         prompt_tokens = 900
