@@ -50,3 +50,15 @@ def test_out_of_scope_unaffected(monkeypatch):
 def test_unknown_defaults_to_policy(monkeypatch):
     monkeypatch.setattr(llm, "_invoke", _fake_invoke("something-weird"))
     assert llm.classify_query("x", []) == "policy"
+
+
+def test_calendar_label_returned(monkeypatch):
+    # §4.2 — who-is-out queries get their own `calendar` lane, split off from `hr`.
+    monkeypatch.setattr(llm, "_invoke", _fake_invoke("calendar"))
+    assert llm.classify_query("who is out this week?", []) == "calendar"
+
+
+def test_calendar_does_not_shadow_hr(monkeypatch):
+    # "calendar" contains no other label substring, so hr/meta/etc parse unchanged.
+    monkeypatch.setattr(llm, "_invoke", _fake_invoke("hr"))
+    assert llm.classify_query("how many leaves do I have left?", []) == "hr"

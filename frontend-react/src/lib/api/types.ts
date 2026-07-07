@@ -14,6 +14,12 @@ export interface paths {
         /**
          * List Documents
          * @description List every corpus document, merging on-disk facts with ingestion status.
+         *
+         *     Status precedence: a ``document_status`` row (live lifecycle: queued/
+         *     processing/failed from the admin upload path) wins. Docs with no row are the
+         *     offline-indexed seed corpus, which the tracking table never sees — for those we
+         *     ask Chroma directly: chunks present => ``indexed``, else ``unknown``. Without
+         *     this, the whole seed corpus showed ``unknown`` despite being fully searchable.
          */
         get: operations["list_documents_admin_documents_get"];
         put?: never;
@@ -36,6 +42,10 @@ export interface paths {
         /**
          * Upload Document
          * @description Accept a document, store it under ``docs/<department>/``, queue ingestion.
+         *
+         *     ``access_tier``/``region``/``doc_status`` are stamped into a ``.meta.yaml``
+         *     sidecar so the uploader can tier any format (csv/xlsx/pdf carry no inline
+         *     frontmatter); for md/txt an inline frontmatter block still takes precedence.
          */
         post: operations["upload_document_admin_documents_upload_post"];
         delete?: never;
@@ -133,6 +143,9 @@ export interface paths {
         /**
          * Logout
          * @description Revoke the current refresh token and clear the cookie.
+         *
+         *     Cookie-authenticated mutation, so it carries the same exact-Origin CSRF guard
+         *     as /auth/refresh.
          */
         post: operations["logout_auth_logout_post"];
         delete?: never;
@@ -170,6 +183,9 @@ export interface paths {
         /**
          * Refresh
          * @description Rotate: validate the refresh cookie, revoke its jti, issue a fresh pair.
+         *
+         *     Rate-limited (per IP — no Bearer header on this route) so it can't be used as
+         *     an unlimited token mint to refresh-then-spam past the chat limit.
          */
         post: operations["refresh_auth_refresh_post"];
         delete?: never;
@@ -209,14 +225,14 @@ export interface paths {
         };
         /**
          * Get History
-         * @description Retrieve conversation history for a session.
+         * @description Retrieve conversation history for one of the caller's own sessions.
          */
         get: operations["get_history_chat_history__session_id__get"];
         put?: never;
         post?: never;
         /**
          * Clear History
-         * @description Clear conversation history for a session.
+         * @description Clear conversation history for one of the caller's own sessions.
          */
         delete: operations["clear_history_chat_history__session_id__delete"];
         options?: never;
@@ -343,10 +359,25 @@ export interface components {
     schemas: {
         /** Body_upload_document_admin_documents_upload_post */
         Body_upload_document_admin_documents_upload_post: {
+            /**
+             * Access Tier
+             * @default all
+             */
+            access_tier: string;
             /** Department */
             department: string;
+            /**
+             * Doc Status
+             * @default active
+             */
+            doc_status: string;
             /** File */
             file: string;
+            /**
+             * Region
+             * @default global
+             */
+            region: string;
         };
         /**
          * ChatRequest
@@ -370,9 +401,10 @@ export interface components {
          * @description Standardized envelope for ``POST /chat``.
          *
          *     ``status`` lets the client distinguish a grounded answer from a graceful
-         *     non-answer without string-matching the prose: ``ok`` (answered),
+         *     non-answer without string-matching the prose: ``ok`` (answered), ``partial``
+         *     (a real but incomplete answer, e.g. policy-only when a tool was down),
          *     ``no_results`` (nothing found), ``blocked`` (RBAC-restricted), ``refused``
-         *     (out of scope).
+         *     (out of scope), ``tool_unavailable`` (the specialist's read tool could not run).
          */
         ChatResponse: {
             /**
@@ -397,9 +429,10 @@ export interface components {
             sources?: components["schemas"]["Source"][];
             /**
              * Status
-             * @description ok | no_results | blocked | refused.
+             * @description ok | partial | no_results | blocked | refused | tool_unavailable.
+             * @enum {string}
              */
-            status: string;
+            status: "ok" | "partial" | "no_results" | "blocked" | "refused" | "tool_unavailable";
         };
         /**
          * CreateSessionResponse

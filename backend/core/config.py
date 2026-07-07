@@ -46,6 +46,24 @@ QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "t
 # set false to disable all telemetry emission (the request path is unchanged).
 TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
+# Deployment stage. Drives privacy-safe telemetry defaults: production omits the
+# raw query text and pseudonymizes user/session ids unless explicitly overridden.
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+_IS_PROD = APP_ENV == "production"
+# Log the raw user query in request traces. Off by default in production (the
+# query can carry PII); on in dev for debugging. Override with the env var.
+TELEMETRY_LOG_RAW_QUERY = os.getenv(
+    "TELEMETRY_LOG_RAW_QUERY", "false" if _IS_PROD else "true"
+).strip().lower() in ("1", "true", "yes")
+# Pseudonymize user/session ids in traces (salted HMAC, stable for correlation).
+# On by default in production so raw identities never hit the log sink.
+TELEMETRY_PSEUDONYMIZE_IDS = os.getenv(
+    "TELEMETRY_PSEUDONYMIZE_IDS", "true" if _IS_PROD else "false"
+).strip().lower() in ("1", "true", "yes")
+# Salt for the id pseudonymization HMAC. Set a real secret in production so small
+# integer user_ids aren't trivially re-identified by brute force.
+TELEMETRY_ID_SALT = os.getenv("TELEMETRY_ID_SALT", "")
+
 # --- Agentic tool layer (Phase A) ---
 # Master rollback switch. false ⇒ the pipeline is pure-RAG, identical to today.
 AGENT_TOOLS_ENABLED = os.getenv("AGENT_TOOLS_ENABLED", "false").strip().lower() in ("1", "true", "yes")

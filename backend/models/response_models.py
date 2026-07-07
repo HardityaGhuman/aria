@@ -4,7 +4,17 @@ models/response_models.py
 Shapes of outgoing API responses. Explicit schemas keep the contract stable for
 the frontend and self-document the Swagger UI.
 """
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+# The client-facing chat status allow-list. Mirrors the control layer's
+# envelope-visible terminal states (``core/control/models._ENVELOPE_STATUSES``):
+# ``partial`` and ``tool_unavailable`` are carried distinctly; every internal
+# failure (invalid_plan / grounding_failed / timeout / internal_error) collapses
+# to a generic ``error`` surfaced via the error event, never this field — so an
+# internal terminal state can't leak into the wire contract.
+ChatStatus = Literal["ok", "partial", "no_results", "blocked", "refused", "tool_unavailable"]
 
 
 class Source(BaseModel):
@@ -20,9 +30,10 @@ class ChatResponse(BaseModel):
     """Standardized envelope for ``POST /chat``.
 
     ``status`` lets the client distinguish a grounded answer from a graceful
-    non-answer without string-matching the prose: ``ok`` (answered),
+    non-answer without string-matching the prose: ``ok`` (answered), ``partial``
+    (a real but incomplete answer, e.g. policy-only when a tool was down),
     ``no_results`` (nothing found), ``blocked`` (RBAC-restricted), ``refused``
-    (out of scope).
+    (out of scope), ``tool_unavailable`` (the specialist's read tool could not run).
     """
 
     answer: str = Field(..., description="The assistant's answer text.")
@@ -32,7 +43,8 @@ class ChatResponse(BaseModel):
     )
     latency_ms: int = Field(..., description="Server-side time to produce the answer.")
     session_id: str = Field(..., description="The conversation id this reply belongs to.")
-    status: str = Field(..., description="ok | no_results | blocked | refused.")
+    status: ChatStatus = Field(
+        ..., description="ok | partial | no_results | blocked | refused | tool_unavailable.")
 
 
 # --- Auth ---

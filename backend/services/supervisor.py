@@ -26,8 +26,10 @@ logger = get_logger(__name__)
 _SPECIALISTS = build_specialists()
 _POLICY_AGENT = next(s for s in _SPECIALISTS if s.name == "policy-agent")
 
-# Domain label (from classify_query) → specialist name.
-_ROUTE = {"hr": "hr-agent", "policy": "policy-agent"}
+# Domain label (from classify_query) → specialist name. §5.3: `calendar` now routes
+# to its own calendar-agent (whos_out was moved off the hr-agent), retiring the §4.2
+# interim hr-agent route. Each label maps to exactly one isolated specialist.
+_ROUTE = {"hr": "hr-agent", "calendar": "calendar-agent", "policy": "policy-agent"}
 
 
 def route(classification: str, principal, specialists: list[Specialist] | None = None) -> Specialist:

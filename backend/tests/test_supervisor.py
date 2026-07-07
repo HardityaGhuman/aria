@@ -30,6 +30,12 @@ def test_route_unmapped_defaults_to_policy():
     assert sup.route("meta", EMPLOYEE).name == "policy-agent"
 
 
+def test_route_calendar_to_calendar_agent():
+    # §5.3: the interim hr-agent route is retired — a calendar-labeled query now
+    # reaches the dedicated calendar-agent (whos_out lives there, not on hr-agent).
+    assert sup.route("calendar", EMPLOYEE).name == "calendar-agent"
+
+
 def test_route_rbac_fallback_to_policy():
     # A specialist gated above the caller's role falls back to Policy-agent — never
     # exposes a specialist the role can't reach.
