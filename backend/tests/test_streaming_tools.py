@@ -4,6 +4,7 @@ grounded answer."""
 import asyncio
 
 import backend.services.chat_service as cs
+import backend.services.read_pipeline as rp
 from backend.core.agents.specialist import SpecialistResult
 from backend.core.tools.base import ToolResult
 from backend.core.tools.principal import Principal
@@ -28,23 +29,24 @@ async def _async_none(*a, **k):
 
 
 def test_stream_emits_tool_events_and_fuses_number(monkeypatch):
-    monkeypatch.setattr(cs, "_prepare_history", lambda sid: [])
-    monkeypatch.setattr(cs, "classify_query", lambda *a, **k: "hr")
-    monkeypatch.setattr(cs, "_resolve_search_query", _async_ret("pto left"))
-    monkeypatch.setattr(cs, "_preferences_note", lambda uid: None)
-    monkeypatch.setattr(cs, "_user_language", lambda uid: "English")
+    # Pipeline deps patched on rp; the answer-model stream + persistence stay on cs.
+    monkeypatch.setattr(rp, "_prepare_history", lambda sid: [])
+    monkeypatch.setattr(rp, "classify_query", lambda *a, **k: "hr")
+    monkeypatch.setattr(rp, "_resolve_search_query", _async_ret("pto left"))
+    monkeypatch.setattr(rp, "_preferences_note", lambda uid: None)
+    monkeypatch.setattr(rp, "_user_language", lambda uid: "English")
 
     class _Ret:
         status = "ok"; text = "PTO policy excerpt."; sources = [{"source": "time-and-leave/working-hours-and-pto.md", "access_tier": "all"}]
         blocked_contact = None
-    monkeypatch.setattr(cs, "retrieve_context", lambda *a, **k: _Ret())
+    monkeypatch.setattr(rp, "retrieve_context", lambda *a, **k: _Ret())
 
     async def fake_run_specialist(specialist, message, history, principal):
         return SpecialistResult(specialist="hr-agent", tool_results=[
             {"name": "leave_balance", "result": ToolResult(status="ok",
              data={"remaining": 12}, summary="12 leave days remaining.")}],
             tool_note="Live data ... - leave_balance: 12 leave days remaining.", status="ok")
-    monkeypatch.setattr(cs, "run_specialist", fake_run_specialist)
+    monkeypatch.setattr(rp, "run_specialist", fake_run_specialist)
     monkeypatch.setattr(cs, "stream_llm_response",
                         lambda *a, **k: iter(["You have ", "12 ", "days."]))
     monkeypatch.setattr(cs, "_persist_quietly", _async_none)

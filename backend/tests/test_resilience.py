@@ -91,7 +91,10 @@ def test_run_blocking_passes_through_existing_app_error():
 
 
 def test_run_blocking_timeout_maps_to_llm_timeout(monkeypatch):
-    monkeypatch.setattr(cs, "LLM_TIMEOUT_SECONDS", -10)  # wait_for timeout = -5 → immediate
+    # _run_blocking + its timeout constant live in the shared pipeline now (cs
+    # re-exports the fn); patch the constant where the fn actually reads it.
+    import backend.services.read_pipeline as rp
+    monkeypatch.setattr(rp, "LLM_TIMEOUT_SECONDS", -10)  # wait_for timeout = -5 → immediate
 
     def _slow():
         import time
