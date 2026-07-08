@@ -10,7 +10,7 @@ import re
 
 from rank_bm25 import BM25Okapi
 
-from backend.rag.vector_store import get_collection
+from backend.rag.vector_repository import get_repository
 
 _bm25_corpus = None
 _bm25_index = None
@@ -53,13 +53,9 @@ def tokenize_for_bm25(text: str) -> list[str]:
 def get_bm25_index():
     global _bm25_corpus, _bm25_index, _bm25_metadata
     if _bm25_index is None:
-        collection = get_collection()
-        docs = collection.get(
-            where={"content_type": {"$nin": ["toc", "overview"]}},
-            include=["documents", "metadatas"],
-        )
-        _bm25_metadata = docs.get("metadatas", [])
-        _bm25_corpus = docs.get("documents", [])
+        candidates = get_repository().all_chunks(exclude_content_types=["toc", "overview"])
+        _bm25_corpus = [c.text for c in candidates]
+        _bm25_metadata = [c.metadata for c in candidates]
 
         tokenized_corpus = [tokenize_for_bm25(doc) for doc in _bm25_corpus] if _bm25_corpus else []
         _bm25_index = BM25Okapi(tokenized_corpus) if tokenized_corpus else None

@@ -8,7 +8,9 @@ worker thread. `_prepare_history_async` is the seam that guarantees that.
 import asyncio
 import threading
 
-from backend.services import chat_service
+# The history-prep seam moved into the shared read pipeline (§6); the transports
+# call it from there. Aliased so the test body reads unchanged.
+from backend.services import read_pipeline as chat_service
 
 
 def test_prepare_history_runs_off_the_event_loop(monkeypatch):

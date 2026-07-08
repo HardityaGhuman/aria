@@ -30,9 +30,9 @@ def test_retrieve_excludes_blocked_tier_from_context_and_sources(monkeypatch):
     """Retrieve-level invariant: a blocked-tier chunk never reaches text/sources,
     even when an allowed chunk is present. Guards against a regression that
     builds context from candidates[:n] instead of allowed[:n]."""
-    class _Coll:
+    class _Repo:
         def count(self): return 5
-    monkeypatch.setattr(rv, "get_collection", lambda: _Coll())
+    monkeypatch.setattr(rv, "get_repository", lambda: _Repo())
     cands = [
         Candidate(chunk_id="a", text="ALLOWED all-tier text", metadata={"access_tier": "all", "source": "x.md", "chunk": 1}),
         Candidate(chunk_id="b", text="SECRET hr_only salary text", metadata={"access_tier": "hr_only", "source": "salary-bands.csv", "chunk": 1}),
@@ -49,9 +49,9 @@ def test_retrieve_excludes_blocked_tier_from_context_and_sources(monkeypatch):
 def test_retrieve_blocked_when_only_restricted_matches(monkeypatch):
     """When every match is blocked, retrieve returns status=blocked with the
     HR contact and an empty text/sources payload."""
-    class _Coll:
+    class _Repo:
         def count(self): return 5
-    monkeypatch.setattr(rv, "get_collection", lambda: _Coll())
+    monkeypatch.setattr(rv, "get_repository", lambda: _Repo())
     cands = [Candidate(chunk_id="b", text="SECRET", metadata={"access_tier": "hr_only", "source": "salary-bands.csv", "chunk": 1})]
     monkeypatch.setitem(rv.STRATEGIES, "hybrid", lambda query, allowed_regions=None: cands)
     r = rv.retrieve("q", strategy="hybrid", allowed_tiers=["all"])

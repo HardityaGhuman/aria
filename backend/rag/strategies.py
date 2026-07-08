@@ -13,11 +13,11 @@ harness select a strategy by name.
 """
 from dataclasses import replace
 
-from backend.core.config import BM25_CANDIDATE_POOL, RETRIEVAL_MAX_DISTANCE, RRF_K_CONSTANT
+from backend.core.config import BM25_CANDIDATE_POOL, RRF_K_CONSTANT
 from backend.rag.bm25 import get_bm25_index, tokenize_for_bm25
 from backend.rag.embedding import get_embedding_function
 from backend.rag.schema import Candidate
-from backend.rag.vector_store import get_collection
+from backend.rag.vector_repository import get_repository
 
 # A BM25 candidate must score at least this fraction of the best score to enter
 # the pool, so trivial single-token overlaps don't pollute results.
@@ -29,19 +29,6 @@ _EXCLUDED_TYPES = ["toc", "overview"]
 
 def _chunk_id(metadata: dict) -> str:
     return f"{metadata.get('source')}:{metadata.get('chunk')}"
-
-
-def _vector_where(allowed_regions: list[str] | None = None) -> dict:
-    """Chroma ``where``: drop structural chunks, always exclude superseded docs,
-    and (when provided) restrict to the caller's regions. Tier gating now lives in
-    the retriever (app-layer partition), not here."""
-    filters: list[dict] = [
-        {"content_type": {"$nin": _EXCLUDED_TYPES}},
-        {"status": {"$ne": "superseded"}},
-    ]
-    if allowed_regions is not None:
-        filters.append({"region": {"$in": allowed_regions}})
-    return filters[0] if len(filters) == 1 else {"$and": filters}
 
 
 def _region_allowed(meta: dict, allowed_regions: list[str] | None) -> bool:
@@ -61,27 +48,15 @@ def vector_search(
     pool: int = BM25_CANDIDATE_POOL,
     allowed_regions: list[str] | None = None,
 ) -> list[Candidate]:
-    """Dense semantic search. Embeds the query explicitly with the same model
-    used for the documents (Chroma's default embedder would diverge silently if
-    EMBEDDING_MODEL_NAME changed)."""
-    collection = get_collection()
+    """Dense semantic search via the vector repository (cosine). Embeds the query
+    explicitly with the same model used for the documents. Region/status/
+    content-type filters and the ``RETRIEVAL_MAX_DISTANCE`` cutoff run inside the
+    repository; tier gating stays in the retriever (app-layer partition)."""
     query_embedding = get_embedding_function().embed_query(query)
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=pool,
-        where=_vector_where(allowed_regions),
-        include=["documents", "metadatas", "distances"],
+    return get_repository().query(
+        query_embedding, k=pool, allowed_regions=allowed_regions,
+        exclude_content_types=_EXCLUDED_TYPES,
     )
-
-    docs = results["documents"][0] if results.get("documents") and results["documents"] else []
-    metas = results["metadatas"][0] if results.get("metadatas") and results["metadatas"] else []
-    dists = results.get("distances", [[]])[0] if results.get("distances") and results["distances"] else []
-
-    candidates = []
-    for chunk, meta, dist in zip(docs, metas, dists):
-        if dist is not None and dist <= RETRIEVAL_MAX_DISTANCE:
-            candidates.append(Candidate(_chunk_id(meta), chunk, meta, distance=dist))
-    return candidates
 
 
 def bm25_search(

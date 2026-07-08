@@ -6,6 +6,7 @@ exercises only the event sequencing/contract — no Chroma, Postgres, or network
 import asyncio
 
 import backend.services.chat_service as cs
+import backend.services.read_pipeline as rp
 from backend.rag.schema import RetrievedContext
 
 
@@ -16,18 +17,19 @@ def _collect(session, message, tiers, regions):
 
 
 def _patch_common(monkeypatch):
-    # No history/persistence DB; no query-rewrite LLM.
-    monkeypatch.setattr(cs, "_prepare_history", lambda session_id: [])
+    # History + query-rewrite are shared-pipeline deps (patch on rp); persistence is
+    # transport-owned (patch on cs).
+    monkeypatch.setattr(rp, "_prepare_history", lambda session_id: [])
     monkeypatch.setattr(cs, "_persist_quietly", lambda *a, **k: asyncio.sleep(0))
-    monkeypatch.setattr(cs, "_resolve_search_query",
+    monkeypatch.setattr(rp, "_resolve_search_query",
                         lambda message, history: asyncio.sleep(0, result=message))
 
 
 def test_normal_query_streams_tokens_then_done(monkeypatch):
     _patch_common(monkeypatch)
-    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(rp, "classify_query", lambda message, history: "policy")
     monkeypatch.setattr(
-        cs, "retrieve_context",
+        rp, "retrieve_context",
         lambda *a, **k: RetrievedContext(
             "ctx",
             [{"source": "time-and-leave/pto.md", "chunk": 1, "access_tier": "all", "section": "PTO"}],
@@ -56,9 +58,9 @@ def test_normal_query_streams_tokens_then_done(monkeypatch):
 
 def test_blocked_query_emits_single_done_no_tokens(monkeypatch):
     _patch_common(monkeypatch)
-    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(rp, "classify_query", lambda message, history: "policy")
     monkeypatch.setattr(
-        cs, "retrieve_context",
+        rp, "retrieve_context",
         lambda *a, **k: RetrievedContext("", status="blocked", blocked_contact="HR"),
     )
 
@@ -77,9 +79,9 @@ def test_blocked_query_emits_single_done_no_tokens(monkeypatch):
 
 def test_sentinel_reply_never_leaks_and_maps_to_no_results(monkeypatch):
     _patch_common(monkeypatch)
-    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(rp, "classify_query", lambda message, history: "policy")
     monkeypatch.setattr(
-        cs, "retrieve_context",
+        rp, "retrieve_context",
         lambda *a, **k: RetrievedContext(
             "ctx", [{"source": "x.md", "chunk": 1, "access_tier": "all", "section": "S"}], status="ok",
         ),
@@ -106,10 +108,10 @@ def test_no_retrieval_results_message_is_localized(monkeypatch):
     # Parity with the sync path: a Spanish-language user must get the Spanish
     # "couldn't find that" message on the streaming no-results branch too.
     _patch_common(monkeypatch)
-    monkeypatch.setattr(cs, "classify_query", lambda message, history: "policy")
-    monkeypatch.setattr(cs, "retrieve_context",
+    monkeypatch.setattr(rp, "classify_query", lambda message, history: "policy")
+    monkeypatch.setattr(rp, "retrieve_context",
                         lambda *a, **k: RetrievedContext("", [], status="ok"))
-    monkeypatch.setattr(cs, "_user_language", lambda owner_user_id: "Spanish")
+    monkeypatch.setattr(rp, "_user_language", lambda owner_user_id: "Spanish")
 
     events = _collect("s1", "una pregunta sin respuesta", ["all"], ["global", "us"])
 

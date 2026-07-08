@@ -1,7 +1,8 @@
 """Offline, one-time document indexer.
 
 Run this once (and again whenever the policy PDFs or the chunking logic change)
-to (re)build the ChromaDB vector store from the PDFs in ``backend/data/docs``.
+to (re)build the pgvector authoritative store from the files in
+``backend/data/docs``.
 
 Indexing is deliberately kept out of the running web app: the API server only
 reads the prebuilt index, it never ingests documents at request time.
@@ -17,9 +18,14 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.rag import initialize_vectorstore
+from backend.rag.vector_schema import ensure_vector_extension, initialize_vector_store_schema
 
 
 def main() -> int:
+    # Bootstrap the store so the indexer can run standalone, before the server's
+    # first boot (create the pgvector extension + tables if absent; idempotent).
+    ensure_vector_extension()
+    initialize_vector_store_schema()
     print("Building vector store from policy documents...")
     stats = initialize_vectorstore()
     print(

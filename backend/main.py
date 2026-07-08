@@ -23,7 +23,8 @@ from slowapi.errors import RateLimitExceeded
 from backend.core.tokens import initialize_tokens_table
 from backend.core.users import initialize_users_table
 from backend.core.logging import get_logger, setup_logging
-from backend.rag import get_collection
+from backend.rag import get_repository
+from backend.rag.vector_schema import ensure_vector_extension, initialize_vector_store_schema
 
 setup_logging()
 logger = get_logger("company-chatbot")
@@ -69,7 +70,22 @@ async def startup_event():
     initialize_preferences_table()
     logger.info("Chat memory, users, refresh-token, doc-status, and preferences tables ready.")
 
-    chunk_count = get_collection().count()
+    # Authoritative vector store: create the pgvector extension (fail fast if the
+    # binary is missing) + the documents/document_versions/chunks schema, then
+    # report how many chunks are indexed.
+    ensure_vector_extension()
+    initialize_vector_store_schema()
+    logger.info("Vector store schema ready.")
+
+    # Private originals store: verify the S3 bucket is reachable + authorized so
+    # a bad bucket/region/credential stops boot with a clear message (§11 slice C).
+    from backend.core.config import OBJECT_STORE_BACKEND
+    if OBJECT_STORE_BACKEND == "s3":
+        from backend.rag.object_store import get_object_store
+        get_object_store().ensure_bucket()
+        logger.info("Originals object store ready (bucket reachable).")
+
+    chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
             "Vector store is empty. Run the offline indexer before asking "
