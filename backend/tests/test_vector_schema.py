@@ -31,3 +31,15 @@ def test_initialize_is_idempotent():
     vector_schema.ensure_vector_extension()
     vector_schema.initialize_vector_store_schema()
     vector_schema.initialize_vector_store_schema()  # second call must not raise
+
+
+@requires_pg
+def test_document_versions_has_object_columns():
+    vector_schema.ensure_vector_extension()
+    vector_schema.initialize_vector_store_schema()
+    with connection() as conn:
+        cols = {r[0] for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='document_versions'"
+        ).fetchall()}
+    assert {"object_key", "original_content_type", "original_size"} <= cols
