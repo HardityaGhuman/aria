@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS document_versions (
     parser_version    TEXT,
     embedding_version TEXT,
     checksum          TEXT,
+    object_key            TEXT,
+    original_content_type TEXT,
+    original_size         INTEGER,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (document_id, version_no)
 );
@@ -52,6 +55,11 @@ CREATE INDEX IF NOT EXISTS chunks_status_idx  ON chunks (content_status);
 CREATE INDEX IF NOT EXISTS chunks_ctype_idx   ON chunks (content_type);
 CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
     ON chunks USING hnsw (embedding vector_cosine_ops);
+
+-- Idempotent: existing installs gain the object-storage columns (§11 slice C).
+ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS object_key            TEXT;
+ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS original_content_type TEXT;
+ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS original_size         INTEGER;
 """
 
 
