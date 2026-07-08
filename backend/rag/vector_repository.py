@@ -11,7 +11,10 @@ import math
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from backend.core.logging import get_logger
 from backend.rag.schema import Candidate
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -63,7 +66,9 @@ class InMemoryVectorRepository:
         self._meta: dict[str, tuple[str, str]] = {}  # document_id -> (checksum, parser_version)
 
     def upsert_document(self, document_id, department, checksum, parser_version,
-                        embedding_version, chunks):
+                        embedding_version, chunks,
+                        original_bytes=None, original_content_type=None):
+        # The fake has no object store; the blob args are accepted + ignored.
         self._docs[document_id] = list(chunks)
         self._meta[document_id] = (checksum, parser_version)
 
@@ -187,12 +192,26 @@ class PgVectorRepository:
             n = conn.execute(
                 "SELECT count(*) FROM chunks WHERE document_id = %s", (document_id,)
             ).fetchone()[0]
+            keys = [r[0] for r in conn.execute(
+                "SELECT object_key FROM document_versions "
+                "WHERE document_id = %s AND object_key IS NOT NULL", (document_id,)
+            ).fetchall()]
             # ON DELETE CASCADE removes versions + chunks.
             conn.execute("DELETE FROM documents WHERE document_id = %s", (document_id,))
+        # Best-effort blob cleanup: the DB row is already gone, so a failed delete
+        # only leaves an orphan (harmless), never blocks the document delete.
+        from backend.rag.object_store import get_object_store
+        store = get_object_store()
+        for key in keys:
+            try:
+                store.delete(key)
+            except Exception:
+                logger.warning("orphaned original blob %s (row already deleted)", key)
         return int(n)
 
     def upsert_document(self, document_id, department, checksum, parser_version,
-                        embedding_version, chunks):
+                        embedding_version, chunks,
+                        original_bytes=None, original_content_type=None):
         with connection() as conn:
             # Atomic replace: drop the old doc (cascades versions+chunks), reinsert.
             conn.execute("DELETE FROM documents WHERE document_id = %s", (document_id,))
@@ -210,6 +229,18 @@ class PgVectorRepository:
                 "UPDATE documents SET active_version_id = %s, updated_at = now() WHERE document_id = %s",
                 (version_id, document_id),
             )
+            # Store the original blob keyed by the new version id, and record its
+            # locator on the version row. A put that survives a txn rollback leaves
+            # a harmless orphan blob (no row points at it) — GC later.
+            if original_bytes is not None:
+                from backend.rag.object_store import get_object_store
+                key = f"originals/{version_id}"
+                get_object_store().put(key, original_bytes, original_content_type)
+                conn.execute(
+                    "UPDATE document_versions SET object_key=%s, original_content_type=%s, "
+                    "original_size=%s WHERE version_id=%s",
+                    (key, original_content_type, len(original_bytes), version_id),
+                )
             from psycopg.types.json import Jsonb  # pyrefly: ignore [missing-import]
             with conn.cursor() as cur:
                 cur.executemany("""
