@@ -110,6 +110,26 @@ def decode_token(token: str) -> dict:
         raise AuthError(f"Invalid or expired token: {exc}") from exc
 
 
+def sign_state(data: dict, *, ttl_seconds: int = 600) -> str:
+    """Sign a short-lived opaque state blob (reuses the JWT secret). Used to bind an
+    OAuth round-trip to the initiating user so a callback cannot be forged/fixated."""
+    now = datetime.now(timezone.utc)
+    payload = {**data, "type": "slack_state", "exp": now + timedelta(seconds=ttl_seconds), "iat": now}
+    return jwt.encode(payload, require_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def verify_state(token: str) -> dict | None:
+    """Return the state claims if the blob is a valid, unexpired slack_state token,
+    else None. Never raises to the caller."""
+    try:
+        claims = jwt.decode(token, require_jwt_secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if claims.get("type") != "slack_state":
+        return None
+    return claims
+
+
 # --- FastAPI dependencies ---
 # auto_error=False so a missing/garbage header yields our own clean 401 rather
 # than FastAPI's default 403.
