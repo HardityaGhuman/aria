@@ -49,7 +49,7 @@ def test_route_rbac_fallback_to_policy():
 
 def test_build_tool_note_from_typed_fields():
     results = [{"name": "leave_balance", "result": ToolResult(status="ok",
-               data={"remaining": 12}, summary="12 leave days remaining.")}]
+               data={"remaining": 12, "total": 20, "used": 8}, summary="12 leave days remaining.")}]
     note = sup.build_tool_note(results)
     assert note is not None and "12" in note and "leave_balance" in note
     assert sup.build_tool_note([]) is None
@@ -82,7 +82,7 @@ def test_run_specialist_hr_gathers_and_builds_note(monkeypatch):
         assert kwargs.get("gather_only") is True
         return AgentOutcome(status="gathered", answer=None, tool_results=[
             {"name": "leave_balance", "result": ToolResult(status="ok",
-             data={"remaining": 12}, summary="12 leave days remaining.")}])
+             data={"remaining": 12, "total": 20, "used": 8}, summary="12 leave days remaining.")}])
     monkeypatch.setattr(sup, "run_agent_loop", fake_loop)
     hr = next(s for s in build_specialists() if s.name == "hr-agent")
     out = _run(sup.run_specialist(hr, "leaves?", [], EMPLOYEE))

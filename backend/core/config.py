@@ -30,6 +30,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/company_ch
 MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "2000"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 EMBEDDINGS_LOCAL_ONLY = os.getenv("EMBEDDINGS_LOCAL_ONLY", "true").lower() == "true"
+
+# --- Object storage (§11 slice C): private originals bucket ---
+OBJECT_STORE_BACKEND = os.getenv("OBJECT_STORE_BACKEND", "s3").strip().lower()
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")   # empty = real AWS
+S3_BUCKET = os.getenv("S3_BUCKET", "")
+S3_REGION = os.getenv("S3_REGION", "us-east-1")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "6"))
 # Vector candidates beyond this cosine distance are dropped as non-matches.
 # Tunable so the eval harness can calibrate it instead of hardcoding a magic
@@ -109,7 +117,6 @@ def _resolve_backend_path(path: str) -> str:
     return os.path.abspath(os.path.join(BASE_DIR, path))
 
 
-CHROMA_DB_PATH = _resolve_backend_path(os.getenv("CHROMA_DB_PATH", os.path.join(DATA_DIR, "chroma_db")))
 DOCS_PATH = _resolve_backend_path(os.getenv("DOCS_PATH", os.path.join(DATA_DIR, "docs")))
 SYSTEM_PROMPT_PATH = _resolve_backend_path(os.getenv("SYSTEM_PROMPT_PATH", os.path.join(os.path.dirname(BASE_DIR), "docs", "system_prompt.txt")))
 

@@ -95,6 +95,15 @@ _ENVELOPE_STATUSES = {
 }
 
 
+def envelope_status_for(terminal: TerminalState) -> str:
+    """The client-facing envelope `status` for a terminal state. `partial` and
+    `tool_unavailable` survive verbatim; every internal-only terminal (invalid_plan /
+    grounding_failed / timeout / internal_error) collapses to opaque `"error"` so the
+    client never learns the internal failure taxonomy. The single mapping both
+    transports share."""
+    return _ENVELOPE_STATUSES.get(terminal, "error")
+
+
 @dataclass(frozen=True)
 class RequestContext:
     """The server-owned inputs to planning. Identity is the JWT-derived Principal

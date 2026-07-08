@@ -4,7 +4,10 @@ python-dotenv>=1.0.0
 pydantic>=2.6.0
 psycopg[binary,pool]>=3.2.0
 litellm>=1.0.0
-chromadb>=0.5.0
+# pgvector: Postgres vector adapter for psycopg (§11 authoritative store)
+pgvector>=0.3.0
+# boto3: AWS S3 client for private originals storage (§11 slice C)
+boto3>=1.34
 sentence-transformers>=2.6.0
 pypdf>=4.2.0
 requests>=2.31.0

@@ -12,7 +12,7 @@ something relevant exists but the caller cannot see it.
 from backend.core.config import RETRIEVAL_STRATEGY, RETRIEVAL_TOP_K
 from backend.rag.schema import Candidate, RetrievedContext
 from backend.rag.strategies import STRATEGIES
-from backend.rag.vector_store import get_collection
+from backend.rag.vector_repository import get_repository
 
 
 def partition_by_tier(
@@ -66,7 +66,7 @@ def retrieve(
             f"Unknown retrieval strategy '{strategy}'. Choose from {list(STRATEGIES)}."
         )
 
-    if get_collection().count() == 0:
+    if get_repository().count() == 0:
         return RetrievedContext("No company policy documents have been indexed yet.", status="empty")
 
     candidates = STRATEGIES[strategy](query, allowed_regions=allowed_regions)

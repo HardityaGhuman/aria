@@ -1,55 +1,12 @@
-"""Tests for the retrieval where-clause helpers (pure helpers, no DB).
+"""Tests for the BM25-path filter helpers (pure helpers, no DB).
 
-Tier gating was removed from strategies.py (moved to the retriever's
-partition_by_tier). These tests cover: content_type exclusion, status
-exclusion, and region filtering — the three axes that still live here.
+The vector path's content_type/status/region filtering now runs inside the
+`VectorRepository` (§11 storage swap) and is covered by
+test_vector_repository_inmemory + test_retrieval_parity. The Chroma-specific
+`_vector_where` builder was deleted with the Chroma backend. What remains here
+are the helpers `bm25_search` still applies in app code: region + status gates.
 """
 from backend.rag import strategies
-
-
-def test_where_excludes_structural_chunks_and_status_no_region():
-    # No regions: should produce content_type + status only.
-    result = strategies._vector_where()
-    assert result == {
-        "$and": [
-            {"content_type": {"$nin": ["toc", "overview"]}},
-            {"status": {"$ne": "superseded"}},
-        ]
-    }
-
-
-def test_where_none_region_includes_status_no_region_no_tier():
-    """_vector_where(None): content_type + status, no region, no access_tier."""
-    result = strategies._vector_where(None)
-    assert "$and" in result
-    clauses = result["$and"]
-    assert {"content_type": {"$nin": ["toc", "overview"]}} in clauses
-    assert {"status": {"$ne": "superseded"}} in clauses
-    # No tier or region clause
-    for clause in clauses:
-        assert "access_tier" not in clause
-        assert "region" not in clause
-
-
-def test_where_adds_region_filter_when_regions_given():
-    result = strategies._vector_where(["global", "us"])
-    assert result == {
-        "$and": [
-            {"content_type": {"$nin": ["toc", "overview"]}},
-            {"status": {"$ne": "superseded"}},
-            {"region": {"$in": ["global", "us"]}},
-        ]
-    }
-
-
-def test_where_with_regions_includes_status_clause_no_tier():
-    """status exclusion must always appear; no access_tier clause ever."""
-    result = strategies._vector_where(["global", "us"])
-    clauses = result["$and"]
-    assert {"status": {"$ne": "superseded"}} in clauses
-    assert {"region": {"$in": ["global", "us"]}} in clauses
-    for clause in clauses:
-        assert "access_tier" not in clause
 
 
 def test_region_allowed():
