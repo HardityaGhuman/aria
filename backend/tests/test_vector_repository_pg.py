@@ -43,6 +43,29 @@ def test_pg_query_ranks_and_filters():
 
 
 @requires_pg
+def test_pg_upsert_stores_original_blob():
+    from backend.rag.object_store import InMemoryObjectStore, set_object_store
+    store = InMemoryObjectStore()
+    set_object_store(store)
+    repo = _setup()
+    repo.upsert_document("test/a.md", "test", "h1", "cv1", "ev1",
+                         [_chunk("test/a.md", 1, (1, 0, 0))],
+                         original_bytes=b"PDFBYTES", original_content_type="application/pdf")
+    from backend.core.db import connection
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT v.object_key, v.original_content_type, v.original_size "
+            "FROM documents d JOIN document_versions v ON d.active_version_id=v.version_id "
+            "WHERE d.document_id=%s", ("test/a.md",)).fetchone()
+    assert row is not None
+    key, ct, size = row
+    assert key.startswith("originals/") and ct == "application/pdf" and size == 8
+    assert store.get(key) == b"PDFBYTES"
+    repo.delete_document("test/a.md")
+    assert store.exists(key) is False   # delete_document removed the blob
+
+
+@requires_pg
 def test_pg_upsert_replaces_and_active_meta():
     repo = _setup()
     repo.upsert_document("test/a.md", "test", "h1", "cv1", "ev1", [_chunk("test/a.md", 1, (1, 0, 0))])
