@@ -56,8 +56,11 @@ CLAUDE.md
 docs/superpowers
 
 # Local planning docs — working contract, kept out of git (code + origin-reflected only)
+# CONSOLIDATED into MASTER_PLAN.md (2026-07-07); old sources deleted.
+MASTER_PLAN.md
 tighten_plan.md
 docs/final-rescope-plan.md
+PROGRESS.md
 
 # Isolated RAGAS evaluation environment
 eval_venv/
@@ -81,3 +84,4 @@ node_modules/
 /login-bg2.png
 
 .superpowers
+ARCHITECTURE.md
