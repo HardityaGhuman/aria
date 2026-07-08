@@ -9,12 +9,12 @@ document's ``department`` and ``access_tier`` so retrieval can later filter by
 role. Run via ``python -m backend.index_documents``.
 """
 import os
-import re
 
-from backend.core.config import DOCS_PATH
+from backend.core.config import DOCS_PATH, EMBEDDING_MODEL_NAME
 from backend.core.logging import get_logger
 from backend.rag.bm25 import invalidate_bm25
 from backend.rag.chunking import CHUNK_VERSION, chunk_documents
+from backend.rag.embedding import get_embedding_function
 from backend.rag.loaders import (
     DEFAULT_ACCESS_TIER,
     DEFAULT_STATUS,
@@ -22,7 +22,7 @@ from backend.rag.loaders import (
     file_hash,
     load_document,
 )
-from backend.rag.vector_store import get_collection, get_vector_store
+from backend.rag.vector_repository import ChunkInput, get_repository
 
 logger = get_logger(__name__)
 
@@ -49,15 +49,11 @@ def _iter_document_files(root: str):
 
 
 def delete_document_chunks(rel_path: str) -> int:
-    """Delete all Chroma chunks whose ``source`` matches ``rel_path``. Returns the
-    number of chunks removed and invalidates the BM25 cache so it rebuilds."""
-    collection = get_collection()
-    existing = collection.get(where={"source": rel_path})
-    ids = existing.get("ids", []) or []
-    if ids:
-        collection.delete(ids=ids)
+    """Delete all chunks for a document and invalidate BM25. Returns count removed."""
+    removed = get_repository().delete_document(rel_path)
+    if removed:
         invalidate_bm25()
-    return len(ids)
+    return removed
 
 
 def list_policy_documents() -> list[dict]:
@@ -79,8 +75,11 @@ def list_policy_documents() -> list[dict]:
 
 
 def initialize_vectorstore() -> dict:
-    """Ingest policy documents into Chroma, reindexing changed files only."""
-    collection = get_collection()
+    """Ingest policy documents into the vector repository, reindexing changed
+    files only. A doc is skipped when its active version's ``checksum`` and
+    ``parser_version`` already match the file hash + CHUNK_VERSION; otherwise the
+    doc's version+chunks are transactionally replaced with a fresh active version."""
+    repo = get_repository()
     stats = {"indexed": 0, "skipped": 0, "deleted": 0}
 
     if not os.path.exists(DOCS_PATH):
@@ -90,32 +89,13 @@ def initialize_vectorstore() -> dict:
 
     for filepath, rel_path, department_fallback in _iter_document_files(DOCS_PATH):
         extension = os.path.splitext(filepath)[1].lower()
-
         source_hash = file_hash(filepath)
-        existing_chunks = collection.get(where={"source": rel_path})
-        existing_hashes = {
-            metadata.get("source_hash")
-            for metadata in existing_chunks.get("metadatas", [])
-            if metadata
-        }
-        existing_chunk_versions = {
-            metadata.get("chunk_version")
-            for metadata in existing_chunks.get("metadatas", [])
-            if metadata
-        }
 
-        if (
-            existing_chunks.get("ids")
-            and existing_hashes == {source_hash}
-            and existing_chunk_versions == {CHUNK_VERSION}
-        ):
+        checksum, parser_version = repo.active_version_meta(rel_path)
+        if checksum == source_hash and parser_version == CHUNK_VERSION:
             logger.info("Skipping %s (already indexed)", rel_path)
             stats["skipped"] += 1
             continue
-
-        if existing_chunks.get("ids"):
-            collection.delete(ids=existing_chunks["ids"])
-            stats["deleted"] += len(existing_chunks["ids"])
 
         pages = load_document(filepath, department_fallback=department_fallback)
         chunk_docs = chunk_documents(pages)
@@ -134,12 +114,11 @@ def initialize_vectorstore() -> dict:
         effective_date = pages[0].metadata.get("effective_date", "2026-01-01")
         status = pages[0].metadata.get("status", DEFAULT_STATUS)
 
-        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", rel_path)
-        chunk_ids = [f"{safe_name}:{source_hash[:12]}:{i}" for i in range(len(chunk_docs))]
-
-        documents = [doc.page_content for doc in chunk_docs]
-        metadatas = [
-            {
+        texts = [doc.page_content for doc in chunk_docs]
+        embeddings = get_embedding_function().embed_documents(texts)
+        chunk_inputs = []
+        for i, (doc, emb) in enumerate(zip(chunk_docs, embeddings)):
+            metadata = {
                 "source": rel_path,
                 "source_hash": source_hash,
                 "chunk": i + 1,
@@ -155,14 +134,21 @@ def initialize_vectorstore() -> dict:
                 "effective_date": effective_date,
                 "status": status,
             }
-            for i, doc in enumerate(chunk_docs)
-        ]
+            chunk_inputs.append(ChunkInput(
+                document_id=rel_path, chunk_index=i + 1, content=doc.page_content,
+                embedding=emb, metadata=metadata, region=region,
+                content_status=status, content_type=doc.metadata.get("content_type", ""),
+            ))
 
-        get_vector_store().add_texts(texts=documents, ids=chunk_ids, metadatas=metadatas)
-        stats["indexed"] += len(documents)
+        existed = repo.active_version_meta(rel_path) != (None, None)
+        repo.upsert_document(rel_path, department, source_hash, CHUNK_VERSION,
+                             EMBEDDING_MODEL_NAME, chunk_inputs)
+        if existed:
+            stats["deleted"] += 1
+        stats["indexed"] += len(chunk_inputs)
         logger.info(
             "Indexed %s (%d chunks, department=%s, access_tier=%s)",
-            rel_path, len(documents), department, access_tier,
+            rel_path, len(chunk_inputs), department, access_tier,
         )
 
     if stats["indexed"] > 0 or stats["deleted"] > 0:
