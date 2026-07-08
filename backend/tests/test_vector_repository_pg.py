@@ -14,7 +14,7 @@ def _setup():
 
 def _emb(v):
     e = [0.0] * 384
-    e[0], e[1], e[2] = v
+    e[0], e[1], e[2] = float(v[0]), float(v[1]), float(v[2])
     return e
 
 
