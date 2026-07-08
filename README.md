@@ -1,371 +1,276 @@
-# Aria — Company Policy RAG Chatbot
+# Aria — Company Policy Assistant
 
-Aria is an internal chatbot that answers employee questions from company policy
-documents. It ingests a department-organized, multi-format corpus
-(`.md` / `.txt` / `.pdf` / `.csv` / `.xlsx`), chunks it with document structure in
-mind, stores it in ChromaDB, retrieves relevant context with hybrid
-(keyword + semantic) search, and asks an LLM to answer **only** from that context
-— gated by the user's **role and region** so restricted documents never leak.
+Aria answers an employee's questions from internal company policy — and only from
+policy the person is actually allowed to see. Ask *"how much PTO do I have left?"*
+or *"who's out next week?"* and it retrieves the right documents, checks your role
+and region, and answers **grounded in real evidence** with citations. If the
+honest answer is "you're not cleared for that" or "I don't have a source," it says
+so instead of inventing one.
 
-This repository is the `app-base` line: a working local RAG pipeline (FastAPI +
-Streamlit + PostgreSQL + ChromaDB) with **JWT auth + 3-tier RBAC + region
-filtering**. It is the foundation for a larger serverless build-out — see
-[`PROGRESS.md`](PROGRESS.md) for the full direction and step-by-step status.
+It is a **read-only** assistant: it can look things up, but it never changes
+company data (no booking leave, no editing calendars). That restraint is a design
+choice — everything is bounded, traceable, and explainable.
 
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| LLM | LiteLLM (provider-agnostic — Groq, Gemini, OpenAI, Anthropic, …) |
-| Backend | FastAPI |
-| Auth | JWT (PyJWT, HS256) + bcrypt; short access token + rotating refresh token (HttpOnly cookie); 3-tier RBAC (employee / manager / HR) + per-user region (US / India) |
-| Streaming | Server-Sent Events (`sse-starlette`) for token-by-token answers |
-| Rate limiting | Per-user / per-IP at the API edge (`slowapi`) |
-| Frontend | React + Vite + TanStack Query (`frontend-react/`, dark mode, SSE streaming); a legacy Streamlit UI remains for quick local testing |
-| Vector DB | ChromaDB (cosine distance, via `langchain-chroma`) |
-| Hybrid retrieval | BM25 (`rank_bm25`) + vector search, fused with Reciprocal Rank Fusion |
-| Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`, via `langchain-huggingface`) |
-| Chunking | Structure-aware (markdown headings / TOC); tabular rows-as-chunks |
-| Chat Memory | PostgreSQL (with rolling summarization) |
-| Document loading | `pypdf` (PDF) · markdown/txt frontmatter · CSV/XLSX (`openpyxl`) via `.meta.yaml` sidecar |
-
-The LLM layer uses [LiteLLM](https://docs.litellm.ai/docs/providers), so the model
-is swappable through env vars — no code changes. Set `MODEL_NAME` to any
-`provider/model_id` and supply the matching API key.
-
-## Policy Corpus
-
-The corpus lives under `backend/data/docs/` as **department subfolders**
-(`hr/`, `finance/`, `it/`, `time-and-leave/`, `benefits/`, `legal-compliance/`,
-`people-career/`) — ~30 documents spanning `.md` / `.txt` / `.pdf` / `.csv` /
-`.xlsx`. The company is the fictional **GSVH Corp** (US parent + GSVH India Pvt
-Ltd).
-
-Every `.md`/`.txt` document declares its own metadata in frontmatter; tabular and
-PDF files carry a companion `<name>.meta.yaml` sidecar instead:
-
-```markdown
 ---
-department: hr
-access_tier: all          # all | manager | hr_only
-region: global            # global | us | india
-doc_type: policy          # policy | procedure | handbook | faq | reference_table
-version: 2026.1
-effective_date: 2026-01-01
-status: active            # active | superseded (superseded docs are excluded)
-title: Employment Basics
+
+## What it does
+
+- **Answers from documents, not memory.** Every reply is built from retrieved
+  policy text; nothing is made up. No source → it refuses.
+- **Respects who's asking.** Role (employee / manager / HR) and region (US / India)
+  decide which documents you can see. A restricted doc's text never even reaches
+  the model when you're not cleared.
+- **Three specialists, one router.** A cheap classifier reads your question and
+  hands it to exactly one specialist: **Policy**, **HR** (your own leave balance),
+  or **Calendar** (who's out).
+- **Streams or returns whole.** Same logic behind both `/chat` (one response) and
+  `/chat/stream` (token-by-token).
+- **Remembers the conversation.** Per-user chat sessions with rolling
+  summarization so long chats stay cheap.
+- **HR can manage the corpus.** Upload / delete / reindex documents; ingestion runs
+  as a durable background job.
+
 ---
-```
 
-Retrieval is filtered on three axes:
-
-- **`access_tier` (RBAC):** employee → `all`; manager → `all` + `manager`;
-  HR → `all` + `manager` + `hr_only`. The tier gate is enforced as a single
-  app-layer partition in the retriever (region + status stay as Chroma filters),
-  so a blocked chunk's text never reaches the LLM.
-- **`region`:** `global` docs are visible to everyone; `us`/`india` docs only to
-  users of that region.
-- **`status`:** `superseded` documents (e.g. the prior-year leave policy) are
-  never surfaced.
-
-When a question's only relevant matches are above the caller's tier, the bot
-returns a graceful **"that's confidential — contact HR / your manager"** message
-instead of a generic miss.
-
-## How It Works
-
-1. Add policy documents under `backend/data/docs/<department>/`
-   (`.md`/`.txt`/`.pdf`/`.csv`/`.xlsx`; tabular + PDF carry a `.meta.yaml` sidecar).
-2. Run the **offline indexer** once (`python -m backend.index_documents`). It:
-   - loads each file (pypdf per-page for PDF; markdown/txt with frontmatter
-     stripped; CSV/XLSX serialized one-row-per-chunk), walking subfolders
-     recursively,
-   - applies **structure-aware chunking** (markdown docs split on `##`+ headings;
-     PDFs on detected TOC/section headings; tiny intro blurbs folded forward; the
-     leading title/overview block tagged `overview` and excluded; tabular rows
-     passed through verbatim as `reference_table`),
-   - embeds each chunk and stores it in ChromaDB with `department`,
-     `access_tier`, `region`, `doc_type`, `version`, `status` metadata. Unchanged
-     files are skipped via a content hash; bump `CHUNK_VERSION` to force a rebuild.
-
-   Indexing is offline-only: the running API reads the prebuilt index and never
-   ingests documents at request time. **HR can trigger a reindex** via
-   `POST /admin/reindex`. (After a CLI reindex, restart the server — it caches the
-   Chroma handle + BM25 index in memory.)
-3. Every request requires a **bearer token** (`POST /auth/login`). The user's
-   role + region determine which documents are retrievable.
-4. Each question is **classified** by a small router model:
-   - `policy` → hybrid retrieval (tier + region filtered) and answer from context,
-   - `meta` → answer from conversation history only,
-   - `out_of_scope` → refuse (general knowledge, content generation, etc.).
-5. For `policy` queries, the message is **rewritten into a standalone search
-   query** (history-aware), then **hybrid retrieval** runs BM25 + vector search,
-   fused with Reciprocal Rank Fusion. The retriever partitions candidates by the
-   caller's tiers; if nothing allowed matches but a restricted doc does, it
-   returns the confidential message.
-6. The LLM answers from the retrieved context + recent history, constrained by
-   the system prompt and a refusal guardrail (cites only documents in context).
-   The caller's saved **preferences** (tone / length / language) are injected into
-   the answer prompt. Answers can be returned whole (`POST /chat`) or streamed
-   token-by-token over SSE (`POST /chat/stream`).
-7. Conversation history is persisted in PostgreSQL per session; sessions are
-   **owned by the user** (listable/renamable/deletable, owner-checked). When
-   history exceeds a token budget, older messages are summarized and pruned.
+## How a question flows
 
 ```mermaid
 flowchart TD
-    A[Policy docs: md / txt / pdf / csv / xlsx] --> B[Load + structure-aware chunking]
-    B --> C[Embeddings + tier/region/status metadata]
-    C --> D[(ChromaDB)]
-
-    E[Streamlit Chat] -->|Bearer token| F[FastAPI /chat]
-    F --> G{Authenticated?}
-    G -->|no| U[401]
-    G -->|yes| R{Classify query}
-    R -->|out_of_scope| X[Refusal]
-    R -->|meta| M[Answer from history]
-    R -->|policy| Q[Rewrite query] --> H[Hybrid retrieval: BM25 + vector → RRF]
-    H --> D
-    D --> H
-    H --> PT{Tier partition}
-    PT -->|nothing allowed, restricted matched| CF[Confidential message]
-    PT -->|allowed| L[LLM via LiteLLM]
-    F --> P[(PostgreSQL chat memory)]
-    P --> L
-    L --> E
-    M --> E
-    X --> E
-    CF --> E
+    U[User asks] -->|JWT identity| API[FastAPI: /chat or /chat/stream]
+    API --> AUTH{Valid token?}
+    AUTH -->|no| E401[401]
+    AUTH -->|yes| CL[Classify intent — small 20B router]
+    CL --> PLAN[Build typed ReadPlan from a fixed table]
+    PLAN --> VAL{Plan allowed?}
+    VAL -->|no| ERR[invalid_plan error]
+    VAL -->|yes| SUP[Supervisor routes to ONE specialist]
+    SUP --> POL[Policy — pure document search]
+    SUP --> HRS[HR — your leave balance + policy]
+    SUP --> CAL[Calendar — who's out]
+    POL --> RET[Hybrid retrieval + role/region filter]
+    HRS --> RET
+    CAL --> RET
+    RET --> ANS[Answer model — large 120B, grounded only]
+    ANS --> GUARD{Actually grounded?}
+    GUARD -->|no| REF[Refusal — empty sources]
+    GUARD -->|yes| OUT[Answer + citations envelope]
 ```
 
-## Setup
+**The control layer is deterministic.** The model *classifies* and *writes*, but it
+never picks the plan. Intent → a **fixed table** → a typed `ReadPlan` → validated
+against hard budgets → one specialist. Every hop emits a redacted trace so you can
+see the boundaries without leaking document text or identities.
+
+**Why two models.** A small **20B** router runs on every message (classify,
+rewrite the query, pick a tool) — fast and cheap. The large **120B** runs once, for
+the one job that needs reasoning: writing the grounded answer. Both are swappable
+by env var (LiteLLM), so the provider is not baked in.
+
+---
+
+## Who sees what (RBAC + region)
+
+Every document self-describes its `access_tier`, `region`, and `status`. Retrieval
+filters on all three:
+
+| Axis | Rule |
+|---|---|
+| **access_tier** | employee → `all`; manager → `all`+`manager`; HR → everything |
+| **region** | `global` visible to all; `us` / `india` docs only to that region |
+| **status** | `superseded` docs (last year's policy) are never surfaced |
+
+The tier check is the security boundary. It happens **in application code, before a
+restricted chunk is ever formatted into a prompt** — not as a model instruction a
+clever question could talk its way past. If the only matches are above your tier,
+you get a polite *"that's confidential — contact HR"*, not the numbers.
+
+---
+
+## The specialists
+
+One supervisor delegates to exactly one specialist per request — no fan-out, no
+specialist calling another.
+
+| Specialist | Answers | Backed by |
+|---|---|---|
+| **Policy** | Any policy question | Document retrieval only |
+| **HR** | *Your own* leave balance, fused with policy | `HRISClient` (mocked HR system) + retrieval |
+| **Calendar** | Who's out over a date range | `CalendarClient` (mocked calendar) + retrieval |
+
+Two rules keep this safe:
+- **Identity comes from your token, never from the question.** The HR tool is called
+  with the *server's* idea of who you are, so Bob can never read Alice's balance by
+  asking nicely.
+- **Tools are read-only and isolated.** Each specialist can reach only its own tool
+  (HR can't touch the calendar tool, and vice-versa). A master switch
+  (`AGENT_TOOLS_ENABLED=false`) turns every tool off and falls back to pure document
+  search.
+
+---
+
+## Retrieval, briefly
+
+Two searches run in parallel and get merged:
+
+- **Semantic** — the question is embedded (local MiniLM model) and matched by
+  meaning against the vector index.
+- **Keyword** — BM25 catches exact terms the semantic search might miss.
+
+Their rankings are fused with **RRF** (Reciprocal Rank Fusion — a simple
+"agreed-on by both lists ranks higher" formula). The merged top results, after the
+role/region/status filter, become the evidence the answer model is allowed to use.
+
+---
+
+## Ingestion — how documents get in
+
+HR uploads, deletes, or reindexes. The request returns immediately; the real work
+is a **durable job** so nothing is lost if the server restarts mid-processing.
+
+```mermaid
+flowchart LR
+    HR[HR: upload / delete / reindex] --> ENQ[Enqueue durable job]
+    ENQ --> Q[(ingestion_jobs — Postgres queue)]
+    Q --> W[Worker thread claims one job<br/>FOR UPDATE SKIP LOCKED]
+    W --> P[Load → structure-aware chunk → embed]
+    P --> PGV[(Postgres + pgvector<br/>chunks + embeddings)]
+    P --> S3[(S3 — original file, private)]
+    W --> ST[document_status: indexed / failed]
+    W -.->|transient failure: retry w/ backoff| Q
+```
+
+- **Durable + crash-safe.** The job lives in Postgres. If the worker dies mid-embed,
+  the job is reclaimed after its lease expires and re-run — no stuck documents, no
+  lost work.
+- **Idempotent.** Re-running a job replaces the document atomically; duplicate
+  delivery never creates duplicate chunks, and a failed run never corrupts the live
+  version being served.
+- **Originals kept privately.** The raw uploaded file is stored in **S3** (encrypted,
+  no public access), keyed per document version — the searchable chunks live in
+  Postgres, the source-of-truth file lives in S3.
+- **Retries then gives up cleanly.** Transient errors back off and retry a few times;
+  a genuinely bad document ends as `failed` in the admin list, re-uploadable.
+
+---
+
+## Where data lives
+
+Everything the *assistant* owns is in Postgres. Everything that's the *business's*
+truth (leave balances, calendars) stays behind mocked interfaces and is never
+copied here.
+
+| Store | Holds |
+|---|---|
+| **Postgres** | users · refresh tokens · chat sessions + messages · preferences · document status · **documents / document_versions / chunks** (with `vector(384)` embeddings) · **ingestion_jobs** queue |
+| **S3** | original uploaded files (private, encrypted, keyed by version) |
+| **In-memory** | the BM25 keyword index — a derived cache, rebuilt from the chunk table |
+
+The rule: the app owns the assistant's state; it never persists the company's
+actual HR/calendar truth.
+
+---
+
+## Security invariants
+
+- **Identity from the JWT only** — any `user_id`/`email` in model output is ignored.
+- **Tier filter before formatting** — restricted text can't reach the model.
+- **No write tools exist anywhere** — read-only by construction.
+- **Prompt-injection defense in depth** — fixed system rules + a per-request nonced
+  fence around retrieved text; a document can *request* a tool call but never
+  *authorize* one.
+- **SQL always parameterized**; sessions are owner-checked (you touch only your own).
+- **Traces redact** — logs carry ids and scores, never document bodies, emails, or
+  tokens.
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Backend | FastAPI (sync `/chat` + SSE `/chat/stream` share one pipeline) |
+| LLM gateway | LiteLLM — provider-agnostic (default Groq `gpt-oss-120b` / `gpt-oss-20b`) |
+| Vector store | PostgreSQL + **pgvector** (cosine, HNSW index) |
+| Keyword search | BM25 (`rank-bm25`), fused via RRF |
+| Embeddings | Sentence-Transformers `all-MiniLM-L6-v2` (local, 384-dim) |
+| Object storage | AWS S3 (originals) behind a swappable `ObjectStore` seam |
+| Auth | JWT (HS256) + bcrypt; short access token + rotating refresh cookie; 3-tier RBAC + region |
+| Frontend | React (Vite + TanStack Query) — chat, SSE, sessions, prefs, HR doc portal, dark mode |
+| Ingestion | Durable Postgres job queue + in-process worker |
+
+---
+
+## Run it
 
 ```bash
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-```
 
-Create a local PostgreSQL database (chat memory + users):
-
-```bash
-# If PostgreSQL is not installed on macOS:
-brew install postgresql@16
-brew services start postgresql@16
-
+# Postgres + pgvector
+brew install postgresql@16 pgvector && brew services start postgresql@16
 createdb company_chatbot
-```
 
-Create `backend/.env` from the template (`backend/.env.example` is the source of
-truth). At minimum set a provider key + `MODEL_NAME`, and a `JWT_SECRET` (the
-server refuses to boot without it):
+# backend/.env — copy the template, set a provider key + JWT_SECRET (+ S3 creds)
+cp backend/.env.example backend/.env
 
-```ini
-# Pick one provider's key + matching MODEL_NAME
-GEMINI_API_KEY=your_key_here
-MODEL_NAME=gemini/gemini-2.5-flash
-ROUTER_MODEL_NAME=gemini/gemini-2.5-flash-lite
-LLM_TIMEOUT_SECONDS=45
-
-# PostgreSQL (chat memory + users)
-DATABASE_URL=postgresql://localhost:5432/company_chatbot
-MAX_HISTORY_TOKENS=2000
-
-# Auth (required) — generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
-JWT_SECRET=your_long_random_secret
-JWT_EXPIRY_HOURS=8
-ACCESS_TOKEN_TTL_MIN=30          # access-token lifetime
-REFRESH_TOKEN_TTL_DAYS=14        # refresh-token lifetime
-COOKIE_SECURE=false              # true in prod (https); false for local http dev
-FRONTEND_ORIGIN=http://localhost:5173   # CORS + /auth/refresh CSRF origin check
-
-# Rate limits + LLM resilience
-RATE_LIMIT_CHAT=30/minute
-RATE_LIMIT_LOGIN=10/minute
-LLM_MAX_RETRIES=2
-LLM_CONTEXT_TOKEN_BUDGET=6000
-
-# Retrieval tuning
-RETRIEVAL_TOP_K=6
-BM25_CANDIDATE_POOL=10
-RETRIEVAL_STRATEGY=hybrid       # vector | bm25 | hybrid
-RETRIEVAL_MAX_DISTANCE=0.8      # cosine-distance floor for vector hits
-QUERY_REWRITE_ENABLED=true      # history-aware follow-up rewriting
-```
-
-Seed user accounts (passwords from env, never hardcoded), build the index, run:
-
-```bash
-# Seed HR + manager + 2 employees (employee2 is region=india)
-SEED_HR_PASSWORD='Test1234!' SEED_MANAGER_PASSWORD='Test1234!' \
-SEED_EMPLOYEE_PASSWORD='Test1234!' SEED_EMPLOYEE2_PASSWORD='Test1234!' \
-python -m backend.seed_users
-
-# Build the vector index once (and again when docs or chunking logic change)
-python -m backend.index_documents
-
-# One command (starts backend + frontend)
+# Seed users, build the index once, start everything
+python -m backend.seed_users        # needs SEED_*_PASSWORD env vars
+python -m backend.index_documents   # re-run when docs or chunking change
 ./start.sh
 ```
 
-- Frontend: http://localhost:8501 (log in first)
-- API docs: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+Seeded accounts (password `Test1234!`): `hr@gsvh.test` (HR, US),
+`manager@gsvh.test`, `employee@gsvh.test`, `employee2@gsvh.test` (India).
 
-Seeded accounts (all password `Test1234!`): `hr@gsvh.test` (hr, us),
-`manager@gsvh.test` (manager, us), `employee@gsvh.test` (employee, us),
-`employee2@gsvh.test` (employee, india).
+- Frontend: http://localhost:5173 · API docs: http://localhost:8000/docs
 
-## Configuration Reference
+**Key config** (full list in `backend/.env.example`):
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MODEL_NAME` | `groq/llama-3.3-70b-versatile` | Main answering model (`provider/model_id`) |
-| `ROUTER_MODEL_NAME` | `groq/llama-3.1-8b-instant` | Small model for classification + query rewriting |
-| `LLM_TIMEOUT_SECONDS` | `45` | Per-call LLM timeout |
-| `DATABASE_URL` | `postgresql://localhost:5432/company_chatbot` | PostgreSQL (chat memory + users) |
-| `MAX_HISTORY_TOKENS` | `2000` | Token budget before history is summarized |
-| `JWT_SECRET` | *(required)* | HS256 signing secret; server refuses to boot if unset |
-| `ACCESS_TOKEN_TTL_MIN` | `30` | Access-token lifetime (minutes) |
-| `REFRESH_TOKEN_TTL_DAYS` | `14` | Refresh-token lifetime (days) |
-| `COOKIE_SECURE` | `true` | Mark the refresh cookie `Secure`; set `false` for local http dev |
-| `FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed browser origin (CORS + refresh CSRF check) |
-| `RATE_LIMIT_CHAT` | `30/minute` | Per-user/IP limit on `/chat` + `/chat/stream` |
-| `RATE_LIMIT_LOGIN` | `10/minute` | Per-IP limit on `/auth/login` |
-| `RATE_LIMIT_ADMIN` | `10/minute` | Per-user/IP limit on `/admin` document upload + reindex |
-| `MAX_UPLOAD_BYTES` | `10485760` | Hard cap (10 MiB) on a single uploaded document |
-| `LLM_MAX_RETRIES` | `2` | Transient-error retries (exponential backoff) |
-| `LLM_CONTEXT_TOKEN_BUDGET` | `6000` | Retrieved context is truncated to this token budget |
-| `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence-transformers embedding model |
-| `EMBEDDINGS_LOCAL_ONLY` | `true` | Use only locally cached embedding weights |
-| `RETRIEVAL_STRATEGY` | `hybrid` | `vector`, `bm25`, or `hybrid` |
-| `RETRIEVAL_TOP_K` | `6` | Number of chunks passed to the LLM |
-| `RETRIEVAL_MAX_DISTANCE` | `0.8` | Cosine-distance floor; vector hits beyond it are dropped |
-| `RRF_K_CONSTANT` | `60` | Reciprocal Rank Fusion smoothing constant |
-| `BM25_CANDIDATE_POOL` | `10` | Candidate pool size per retriever before fusion |
-| `QUERY_REWRITE_ENABLED` | `true` | History-aware query rewriting before retrieval |
+| Var | Default | Purpose |
+|---|---|---|
+| `MODEL_NAME` | `groq/openai/gpt-oss-120b` | large answer model |
+| `ROUTER_MODEL_NAME` | `groq/openai/gpt-oss-20b` | classify / rewrite / tool-select |
+| `AGENT_TOOLS_ENABLED` | `false` | master tool switch (off = pure RAG) |
+| `JWT_SECRET` | *(required)* | refuses to boot without it |
+| `DATABASE_URL` | `postgresql://localhost:5432/company_chatbot` | Postgres |
+| `S3_BUCKET` / `S3_REGION` | *(set for originals)* | private object store |
+| `RETRIEVAL_STRATEGY` / `RETRIEVAL_TOP_K` | `hybrid` / `6` | retrieval |
 
-## Demo Flow
+---
 
-1. Seed users + build the index (see Setup), then `./start.sh`.
-2. Open the Streamlit app and **log in** (e.g. `hr@gsvh.test` / `Test1234!`).
-3. Ask grounded questions:
-   - "How many PTO days do I get after 5 years?" (24 — tenure-banded, current policy)
-   - "What's the 401(k) match?" (4% — US benefits PDF)
-   - "I clicked a suspicious link and lost my laptop — what do I do?"
-4. **RBAC + region in action:** as an **employee**, ask "what are the L5 salary
-   bands?" → restricted (HR-only) so you get the confidential message, not the
-   numbers. Log in as **HR** → you get the bands. As `employee2@gsvh.test` (India)
-   ask "what's the EPF contribution?" → 12%; the same user gets no US-only 401(k).
-5. Only **HR** sees the "Update policies (reindex)" button.
-6. Ask "What is the capital of France?" to see the bot refuse rather than invent.
+## API surface
 
-## API
+Protected routes need `Authorization: Bearer <access_token>`. The full typed
+contract is frozen at [`docs/api/openapi.json`](docs/api/openapi.json) (live at `/docs`).
 
-Protected routes require `Authorization: Bearer <access_token>`. Auth uses a
-**short-lived access token** (returned by `/auth/login`, ~30 min) plus a
-**long-lived refresh token** stored in an `HttpOnly` cookie scoped to
-`/auth/refresh`; the client silently rotates the access token via `/auth/refresh`.
-The full typed contract is frozen at [`docs/api/openapi.json`](docs/api/openapi.json)
-(also live at `/docs`).
+| Group | Endpoints |
+|---|---|
+| **Auth** | `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` |
+| **Chat** | `POST /chat` · `POST /chat/stream` · `GET/POST /chat/sessions` · `PATCH/DELETE /chat/sessions/{id}` · `GET/DELETE /chat/history/{id}` |
+| **Me** | `GET/PUT /me/preferences` |
+| **Admin (HR)** | `POST /admin/documents/upload` · `GET /admin/documents` · `GET /admin/documents/{id}/status` · `DELETE /admin/documents/{id}` · `POST /admin/reindex` |
+| **Ops** | `GET /health` |
 
-**Auth**
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/auth/login` | none | Email + password → access token (+ sets refresh cookie) |
-| `POST` | `/auth/refresh` | refresh cookie | Rotate: revoke old refresh, issue a fresh access + refresh |
-| `POST` | `/auth/logout` | refresh cookie | Revoke the refresh token and clear the cookie |
-| `GET` | `/auth/me` | bearer | Current user `{id, role, region}` |
-
-**Chat**
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/chat` | bearer (own/new session) | Ask a question → response envelope (tier + region filtered) |
-| `POST` | `/chat/stream` | bearer (own/new session) | Same as `/chat` but streams tokens over SSE (`token`/`sources`/`done`/`error`) |
-| `GET` | `/chat/sessions` | bearer | List the caller's own conversations |
-| `POST` | `/chat/sessions` | bearer | Create a new conversation |
-| `PATCH` | `/chat/sessions/{id}` | bearer (owner) | Rename a conversation |
-| `DELETE` | `/chat/sessions/{id}` | bearer (owner) | Delete a conversation + its messages |
-| `GET` | `/chat/history/{session_id}` | bearer (owner) | Get persisted session chat history |
-| `DELETE` | `/chat/history/{session_id}` | bearer (owner) | Clear persisted session chat history |
-
-**Me / Admin / Ops**
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `GET` | `/me/preferences` | bearer | Read the caller's tone/length/language preferences |
-| `PUT` | `/me/preferences` | bearer | Upsert the caller's preferences (injected into the prompt) |
-| `POST` | `/admin/documents/upload` | HR only | Upload a document (multipart); ingestion runs in the background |
-| `GET` | `/admin/documents` | HR only | List corpus documents + per-document ingestion status |
-| `GET` | `/admin/documents/{id}/status` | HR only | One document's status (`queued`/`processing`/`indexed`/`failed`) |
-| `DELETE` | `/admin/documents/{id}` | HR only | Remove a document (file + its vector chunks) |
-| `POST` | `/admin/reindex` | HR only | Rebuild the vector index from the corpus |
-| `GET` | `/health` | none | Liveness check |
-
-**Response envelope** (`POST /chat`, and the SSE `done` event):
+**Response envelope** (`/chat` and the SSE `done` event):
 
 ```json
 {
   "answer": "Full-time employees accrue 20, 24, or 28 PTO days by tenure…",
-  "sources": [{ "document_id": "time-and-leave/working-hours-and-pto.md", "file": "working-hours-and-pto.md", "section": "PTO", "source_type": "all" }],
+  "sources": [{ "document_id": "time-and-leave/working-hours-and-pto.md", "section": "PTO", "source_type": "all" }],
   "latency_ms": 1840,
   "session_id": "abc-123",
   "status": "ok"
 }
 ```
 
-`status ∈ {ok, no_results, blocked, refused}`. Errors use a uniform body:
-`{"error": {"code": "...", "message": "...", "detail": null}}`.
+`status ∈ {ok, no_results, blocked, refused, partial}`. Errors use a uniform
+`{"error": {"code", "message", "detail"}}` body.
+
+---
 
 ## Evaluation
 
-Evaluation is **offline and dev-only** — it never runs on the request path. The
-harness in `backend/eval/` scores the pipeline against a labeled dataset:
-retrieval metrics (`recall@k`, `hit@k`, `mrr`, `context_hit_rate`) with no LLM,
-plus RAGAS answer-quality metrics in an isolated virtualenv. See
-[`backend/eval/README.md`](backend/eval/README.md).
-
-> Note: the labeled dataset still targets the previous corpus and is being
-> regenerated for the expanded GSVH department corpus as part of the
-> retrieval-quality step.
-
-## Project Direction
-
-`app-base` is local + multi-user with auth. The serverless build-out is tracked
-step-by-step in [`PROGRESS.md`](PROGRESS.md). In short:
-
-0. Multi-source, multi-format corpus + ingestion — ✅
-1. JWT auth + 3-tier RBAC + region filtering — ✅
-2. Security & resilience (rate limiting, LLM retry/backoff, CORS; + prompt-injection defense, session object-auth/IDOR fix, upload caps) — ✅
-3. User preferences in PostgreSQL — ✅
-4. Retrieval-quality inspection (eval harness; structural fixes already in) — 🔄
-5. Observability — 🔄 (response envelope ✅; telemetry + metrics pending)
-6. Admin document lifecycle (upload / status / delete / reindex) — ✅
-7. React frontend (chat+SSE, sessions, prefs, HR admin docs, dark mode) — 🔄 built
-8. pgvector migration + Cloud Run deploy
-9. Background workers / event-based ingestion
-
-Also landed alongside the backend-standardization pass (prep for React):
-refresh-token rotation + HttpOnly cookie, SSE streaming, user-owned sessions
-(`SessionStore` seam, Redis-ready), uniform error envelope, and a frozen OpenAPI.
-
-## Notes
-
-- Indexing is offline-only via `python -m backend.index_documents`; HR can also
-  trigger it through `POST /admin/reindex`. Changed files are re-indexed by
-  content hash, and a rebuild is forced when `CHUNK_VERSION` changes. Restart the
-  server after a CLI reindex (in-memory Chroma/BM25 caches).
-- The policy corpus under `backend/data/docs/` **is tracked** (including corpus
-  PDFs); the generated vector store (`backend/data/chroma_db/`) and the archived
-  reference PDF (`backend/data/docs_archive/`) are gitignored.
-- `backend/.env` is gitignored — `JWT_SECRET` and API keys are never committed.
-- **Security posture.** Layered prompt-injection defense (fixed-persona/no-leak
-  system rules + a per-request **nonced** context fence + an integrity preamble on
-  every LLM route, since conversation history is itself an injection surface).
-  Session endpoints enforce **object-level authorization** (a user can only read,
-  send into, or clear their own sessions — see `backend/tests/test_idor.py`).
-  Uploads are HR-gated with a size cap, overwrite protection, and a rate limit;
-  the refresh endpoint exact-matches its CSRF Origin. SQL is fully parameterized
-  and JWTs are verified with an explicit algorithm allow-list. Prompt-level
-  defenses are probabilistic — the hard guarantees remain the RBAC tier partition
-  and JWT-derived identity.
+Offline and dev-only — never on the request path. `backend/eval/` scores retrieval
+(`recall@k`, `mrr`, `hit@k`) with no LLM, plus RAGAS answer-quality in an isolated
+venv. Baseline: hybrid beats vector-only and keyword-only; the weakest spot is
+cross-document questions.
