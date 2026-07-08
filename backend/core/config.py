@@ -84,6 +84,23 @@ MAX_TOOL_STEPS = int(os.getenv("MAX_TOOL_STEPS", "3"))
 # synthesis (get_llm_response) is always the large model.
 AGENT_READ_MODEL = os.getenv("AGENT_READ_MODEL", ROUTER_MODEL_NAME)
 
+# --- Write Slice 1: Slack Leave Self-Service (HITL-gated write) ---
+# Master switch. false ⇒ leave routers unmounted, no write path exists.
+LEAVE_AGENT_ENABLED = os.getenv("LEAVE_AGENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# Slack OAuth app + inbound signature verification.
+SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "")
+SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "")
+SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
+# Shared bearer authenticating n8n -> our API.
+N8N_SHARED_SECRET = os.getenv("N8N_SHARED_SECRET", "")
+# Deterministic validator bounds.
+LEAVE_MAX_CONSECUTIVE_DAYS = int(os.getenv("LEAVE_MAX_CONSECUTIVE_DAYS", "20"))
+LEAVE_MIN_NOTICE_DAYS = int(os.getenv("LEAVE_MIN_NOTICE_DAYS", "3"))
+# Comma-separated ISO dates (YYYY-MM-DD) that leave may not overlap. Empty = none.
+LEAVE_BLACKOUT_DATES = [d.strip() for d in os.getenv("LEAVE_BLACKOUT_DATES", "").split(",") if d.strip()]
+# Postgres store for LangGraph checkpoints. Defaults to the app DB.
+LANGGRAPH_CHECKPOINT_DSN = os.getenv("LANGGRAPH_CHECKPOINT_DSN", DATABASE_URL)
+
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
 # so tests and tooling can import config without a secret present. The server
