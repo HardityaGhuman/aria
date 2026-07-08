@@ -15,3 +15,15 @@ class HRISClient(Protocol):
         """Remaining/total/used leave for the caller, or None if no HRIS record.
         Identity is the Principal — never an LLM-supplied argument."""
         ...
+
+    def manager_email(self, principal: Principal) -> str | None:
+        """The caller's approving manager's email, or None if unrouted."""
+        ...
+
+    def submit_leave(
+        self, principal: Principal, case_id: str, start_date: str, end_date: str, days: int
+    ) -> dict:
+        """Book leave for the caller. Idempotent by ``case_id``. Returns
+        ``{"confirmation_id": str, "remaining": int}``. Raises KeyError for an
+        employee the HRIS has no record of."""
+        ...
