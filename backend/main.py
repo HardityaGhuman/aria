@@ -77,6 +77,14 @@ async def startup_event():
     initialize_vector_store_schema()
     logger.info("Vector store schema ready.")
 
+    # Private originals store: verify the S3 bucket is reachable + authorized so
+    # a bad bucket/region/credential stops boot with a clear message (§11 slice C).
+    from backend.core.config import OBJECT_STORE_BACKEND
+    if OBJECT_STORE_BACKEND == "s3":
+        from backend.rag.object_store import get_object_store
+        get_object_store().ensure_bucket()
+        logger.info("Originals object store ready (bucket reachable).")
+
     chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
