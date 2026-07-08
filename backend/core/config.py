@@ -109,7 +109,6 @@ def _resolve_backend_path(path: str) -> str:
     return os.path.abspath(os.path.join(BASE_DIR, path))
 
 
-CHROMA_DB_PATH = _resolve_backend_path(os.getenv("CHROMA_DB_PATH", os.path.join(DATA_DIR, "chroma_db")))
 DOCS_PATH = _resolve_backend_path(os.getenv("DOCS_PATH", os.path.join(DATA_DIR, "docs")))
 SYSTEM_PROMPT_PATH = _resolve_backend_path(os.getenv("SYSTEM_PROMPT_PATH", os.path.join(os.path.dirname(BASE_DIR), "docs", "system_prompt.txt")))
 

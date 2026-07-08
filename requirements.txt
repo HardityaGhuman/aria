@@ -4,7 +4,6 @@ python-dotenv>=1.0.0
 pydantic>=2.6.0
 psycopg[binary,pool]>=3.2.0
 litellm>=1.0.0
-chromadb>=0.5.0
 # pgvector: Postgres vector adapter for psycopg (§11 authoritative store)
 pgvector>=0.3.0
 sentence-transformers>=2.6.0

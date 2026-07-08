@@ -239,3 +239,10 @@ def set_repository(repo: VectorRepository | None) -> None:
     """Test seam: inject a fake (or None to reset)."""
     global _repository
     _repository = repo
+
+
+def indexed_sources() -> set[str]:
+    """Distinct source paths (rel docs/) with at least one active chunk — the
+    admin doc-status ground truth. Module-level wrapper over the active repository
+    so callers import a stable name (was `vector_store.indexed_sources`)."""
+    return get_repository().indexed_sources()
