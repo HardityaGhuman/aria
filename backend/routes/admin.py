@@ -53,7 +53,7 @@ from backend.rag.indexing import (
     list_policy_documents,
 )
 from backend.rag.loaders import SUPPORTED_EXTENSIONS
-from backend.rag.vector_store import indexed_sources
+from backend.rag.vector_repository import indexed_sources
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
