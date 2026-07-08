@@ -8,7 +8,9 @@ chunk-logic change is detected by CHUNK_VERSION. Each chunk is tagged with the
 document's ``department`` and ``access_tier`` so retrieval can later filter by
 role. Run via ``python -m backend.index_documents``.
 """
+import mimetypes
 import os
+from pathlib import Path
 
 from backend.core.config import DOCS_PATH, EMBEDDING_MODEL_NAME
 from backend.core.logging import get_logger
@@ -140,9 +142,12 @@ def initialize_vectorstore() -> dict:
                 content_status=status, content_type=doc.metadata.get("content_type", ""),
             ))
 
+        raw_bytes = Path(filepath).read_bytes()
+        content_type = mimetypes.guess_type(filepath)[0]  # None is fine (nullable)
         existed = repo.active_version_meta(rel_path) != (None, None)
         repo.upsert_document(rel_path, department, source_hash, CHUNK_VERSION,
-                             EMBEDDING_MODEL_NAME, chunk_inputs)
+                             EMBEDDING_MODEL_NAME, chunk_inputs,
+                             original_bytes=raw_bytes, original_content_type=content_type)
         if existed:
             stats["deleted"] += 1
         stats["indexed"] += len(chunk_inputs)
