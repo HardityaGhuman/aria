@@ -120,7 +120,7 @@ class PgVectorRepository:
 
     def query(self, embedding, k, allowed_regions, exclude_content_types):
         sql = """
-            SELECT c.content, c.metadata, (c.embedding <=> %(emb)s) AS distance
+            SELECT c.content, c.metadata, (c.embedding <=> %(emb)s::vector) AS distance
             FROM chunks c
             JOIN document_versions v ON c.version_id = v.version_id
             WHERE v.lifecycle_state = 'active'
