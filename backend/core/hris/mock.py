@@ -1,13 +1,16 @@
 """core/hris/mock.py
 -------------------
-A local, seeded, in-memory HRIS — the v1 system of record for leave. Chosen over a
-live Google Sheet so a demo runs with no service-account setup, no network/quota on
-the critical path, and is fast + unit-testable. It is a distinct bounded module the
-middleware calls, NOT leave tables in the chat schema — the ownership line holds."""
+A local, seeded, in-memory HRIS — the v1 system of record for leave. Now stateful:
+``submit_leave`` books leave and decrements the balance, so a later ``get_balance``
+reflects it. Booking is idempotent by ``case_id`` (a retried approve-click never
+double-decrements). Still a bounded module behind ``HRISClient``, NOT chat tables —
+the ownership line holds."""
+import uuid
+
 from backend.core.tools.principal import Principal
 
 # Seeded HRIS rows, keyed by the caller's email (the stable identity the Principal
-# carries). manager_email is here for Phase C approval routing — unused in Unit 2.
+# carries). manager_email routes the approval to the caller's manager.
 _SEED = {
     "hr@gsvh.test": {"total_pto": 26, "pto_used": 4, "region": "us", "manager_email": None},
     "manager@gsvh.test": {"total_pto": 24, "pto_used": 10, "region": "us", "manager_email": "hr@gsvh.test"},
@@ -21,6 +24,8 @@ class MockHRIS:
         # Copy so a test mutating rows can't bleed into another test.
         source = _SEED if seed is None else seed
         self._rows = {email: dict(row) for email, row in source.items()}
+        # case_id -> {"confirmation_id", "email", "days"} — idempotency ledger.
+        self._bookings: dict[str, dict] = {}
 
     def get_balance(self, principal: Principal) -> dict | None:
         row = self._rows.get(principal.email) if principal.email else None
@@ -29,3 +34,27 @@ class MockHRIS:
         total = row["total_pto"]
         used = row["pto_used"]
         return {"remaining": total - used, "total": total, "used": used}
+
+    def manager_email(self, principal: Principal) -> str | None:
+        row = self._rows.get(principal.email) if principal.email else None
+        return row.get("manager_email") if row else None
+
+    def submit_leave(
+        self, principal: Principal, case_id: str, start_date: str, end_date: str, days: int
+    ) -> dict:
+        # Idempotent replay: same case_id -> same confirmation, no second decrement.
+        prior = self._bookings.get(case_id)
+        if prior is not None:
+            row = self._rows[prior["email"]]
+            return {"confirmation_id": prior["confirmation_id"], "remaining": row["total_pto"] - row["pto_used"]}
+
+        row = self._rows.get(principal.email) if principal.email else None
+        if row is None:
+            raise KeyError(f"no HRIS record for {principal.email!r}")
+
+        row["pto_used"] += days
+        confirmation_id = f"BK-{uuid.uuid4().hex[:10].upper()}"
+        self._bookings[case_id] = {
+            "confirmation_id": confirmation_id, "email": principal.email, "days": days,
+        }
+        return {"confirmation_id": confirmation_id, "remaining": row["total_pto"] - row["pto_used"]}
