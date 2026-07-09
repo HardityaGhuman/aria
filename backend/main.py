@@ -14,7 +14,7 @@ from backend.routes.admin import router as admin_router
 from backend.routes.me import router as me_router
 from backend.core.preferences import initialize_preferences_table
 from backend.core.chat_memory import initialize_chat_memory
-from backend.core.config import FRONTEND_ORIGIN, require_jwt_secret
+from backend.core.config import FRONTEND_ORIGIN, LEAVE_AGENT_ENABLED, require_jwt_secret
 from backend.core.doc_status import initialize_doc_status_table
 from backend.core.errors import register_error_handlers
 from backend.core.ratelimit import limiter, rate_limit_handler
@@ -85,6 +85,19 @@ async def startup_event():
         get_object_store().ensure_bucket()
         logger.info("Originals object store ready (bucket reachable).")
 
+    if LEAVE_AGENT_ENABLED:
+        from backend.core.slack_identity import initialize_slack_identity_table
+        from backend.core.leave_case import initialize_leave_case_tables
+        from backend.services.leave_checkpointer import get_checkpointer
+        from backend.services.leave_graph import build_leave_graph
+        from backend.core.hris.mock import MockHRIS
+        from backend.routes.leave_agent import set_graph
+        initialize_slack_identity_table()
+        initialize_leave_case_tables()
+        graph = build_leave_graph(hris=MockHRIS(), checkpointer=get_checkpointer())
+        set_graph(graph)
+        logger.info("Leave write agent ready (LEAVE_AGENT_ENABLED=true).")
+
     chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
@@ -100,11 +113,20 @@ async def shutdown_event():
     """Close the DB connection pool so its worker threads stop cleanly."""
     from backend.core.db import close_pool
     close_pool()
+    if LEAVE_AGENT_ENABLED:
+        from backend.services.leave_checkpointer import close_checkpointer
+        close_checkpointer()
 
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(me_router)
 app.include_router(chat_router, prefix="/chat", tags=["Chat"])
+
+if LEAVE_AGENT_ENABLED:
+    from backend.routes.slack_auth import router as slack_auth_router
+    from backend.routes.leave_agent import router as leave_agent_router
+    app.include_router(slack_auth_router)
+    app.include_router(leave_agent_router)
 
 @app.get("/health")
 def health_check():

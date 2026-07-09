@@ -88,3 +88,9 @@ def test_specialist_is_frozen():
     except dataclasses.FrozenInstanceError:
         return
     assert False, "Specialist must be frozen"
+
+
+def test_no_read_specialist_exposes_submit_leave():
+    from backend.core.agents.build import build_specialists
+    for spec in build_specialists():
+        assert spec.registry.get("submit_leave") is None

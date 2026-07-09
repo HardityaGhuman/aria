@@ -36,3 +36,6 @@ reportlab>=4.0.0
 # Test
 pytest>=8.0.0
 httpx>=0.27.0
+
+langgraph>=0.6.0
+langgraph-checkpoint-postgres>=2.0.0
