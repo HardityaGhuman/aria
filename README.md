@@ -7,9 +7,12 @@ and region, and answers **grounded in real evidence** with citations. If the
 honest answer is "you're not cleared for that" or "I don't have a source," it says
 so instead of inventing one.
 
-It is a **read-only** assistant: it can look things up, but it never changes
-company data (no booking leave, no editing calendars). That restraint is a design
-choice — everything is bounded, traceable, and explainable.
+Today it is **read-only**: it looks things up but never changes company data.
+That is the current phase, not a permanent ceiling — the next phase adds
+**human-approval-gated write agents** (e.g. Slack, Jira, calendar) on the same
+controlled spine. Writes are never autonomous: every one passes a risk-tiered
+human-in-the-loop gate, stays idempotent, and lands in an append-only audit log.
+Bounded, traceable, explainable — by construction, read or write.
 
 ---
 
@@ -174,13 +177,39 @@ actual HR/calendar truth.
 
 - **Identity from the JWT only** — any `user_id`/`email` in model output is ignored.
 - **Tier filter before formatting** — restricted text can't reach the model.
-- **No write tools exist anywhere** — read-only by construction.
+- **No write tools shipped yet** — the write phase is human-approval-gated by
+  construction (risk-tiered HITL gate + idempotency + audit); no autonomous write path.
 - **Prompt-injection defense in depth** — fixed system rules + a per-request nonced
   fence around retrieved text; a document can *request* a tool call but never
   *authorize* one.
 - **SQL always parameterized**; sessions are owner-checked (you touch only your own).
 - **Traces redact** — logs carry ids and scores, never document bodies, emails, or
   tokens.
+
+---
+
+## Slack Leave Self-Service (Write Slice 1)
+
+The first **human-approval-gated write**. An employee files leave from Slack; the
+system validates it deterministically, pauses for the manager's Approve/Deny in
+Slack, and only on approval books the leave — with an append-only audit trail and no
+code path that writes without an approved Case. Off by default (`LEAVE_AGENT_ENABLED`);
+when off the system is byte-identical to the read-only assistant above.
+
+**Real:** Slack OAuth account linking, Slack signature verification, n8n transport
+edge, Postgres (identity map, `leave_cases`, append-only audit, LangGraph checkpoints),
+the risk-tiered HITL approval gate, and LangGraph `interrupt`/`resume` (the Case sleeps
+awaiting the manager's click and survives a process restart).
+
+**Mock:** the HRIS write itself — `MockHRIS.submit_leave` decrements an in-memory
+balance idempotently; there is no real Workday/BambooHR call. It sits behind the same
+`HRISClient` seam, so swapping in a real client changes nothing above it.
+
+**Invariants preserved + extended:** identity is server-established (verified Slack
+mapping → `Principal`, never typed); the `submit_leave` tool is registered only in the
+write registry and reachable only from the post-approval `book` node; the decision
+endpoint re-checks the clicker is the Case's approver; writes are idempotent (no double
+book). See `docs/n8n/leave-workflows.md` for the n8n edge.
 
 ---
 
