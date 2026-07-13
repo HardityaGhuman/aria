@@ -10,6 +10,7 @@ sees it; no LLM can select it."""
 from backend.core.hris import HRISClient
 from backend.core.tools.base import ToolResult
 from backend.core.tools.principal import Principal
+from backend.core.write.errors import PermanentWriteError
 
 
 class SubmitLeaveTool:
@@ -35,12 +36,17 @@ class SubmitLeaveTool:
         self._hris = hris
 
     def invoke(self, args: dict, principal: Principal) -> ToolResult:
+        # Connector errors are NOT caught here: Transient/PermanentWriteError propagate to
+        # the graph, the only layer allowed to classify a failure and decide retry-vs-stop.
+        # A tool that swallows the exception into ToolResult(status="error") flattens a
+        # timeout and a "no such record" into the same string, and the decision is then
+        # made by accident.
         try:
             booked = self._hris.submit_leave(
                 principal, args["case_id"], args["start_date"], args["end_date"], args["days"],
             )
-        except KeyError:
-            return ToolResult(status="error", error="no HRIS record for caller")
+        except KeyError as exc:
+            raise PermanentWriteError(f"no HRIS record for caller: {exc}") from exc
         return ToolResult(
             status="ok",
             data={"confirmation_id": booked["confirmation_id"], "remaining": booked["remaining"]},
