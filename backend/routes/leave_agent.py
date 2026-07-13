@@ -7,18 +7,23 @@ the verified slack_user_id (never trusting typed identity), drive the write Case
 on the decision endpoint — re-check that the clicking user is the Case's approver. All
 routes are absent (404) unless LEAVE_AGENT_ENABLED."""
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.config import LEAVE_AGENT_ENABLED
 from backend.core.hris.mock import MockHRIS
 from backend.core.leave_case import create_case, get_case, transition
 from backend.core.slack_identity import principal_for_slack, slack_user_for_email
 from backend.core.slack_verify import require_n8n_secret, verify_slack_signature
+from backend.routes.deps import open_trace
 from backend.services.leave_extract import extract_leave_fields
 from backend.services.leave_graph import resume_case, start_case
 from backend.services.leave_validator import compute_days
 
-router = APIRouter(prefix="/agents/leave", tags=["Leave Agent"])
+# Router-level trace: this edge has no JWT (the caller is n8n, the human is a Slack id),
+# so there is no user to hang the trace on — but the Case's graph events and its extract
+# LLM span still need one id to be joined by.
+router = APIRouter(prefix="/agents/leave", tags=["Leave Agent"],
+                   dependencies=[Depends(open_trace)])
 
 # Process-wide compiled graph over the Postgres checkpointer — built at startup
 # (see main.py wiring, Task 12) and injected here as module state.

@@ -31,7 +31,9 @@ def _enable(monkeypatch, manager="manager@gsvh.test"):
     onboarding_agent.set_hris(_FakeHRIS(manager))
     monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
                         lambda t: {"role": "backend-eng", "extra_tools": []})
-    monkeypatch.setattr(onboarding_agent, "create_case", lambda *a, **k: {"case_id": "cid"})
+    monkeypatch.setattr(onboarding_agent, "get_case_by_idempotency_key", lambda key: None)
+    monkeypatch.setattr(onboarding_agent, "create_case",
+                        lambda *a, **k: {"case_id": "cid", "status": "draft"})
 
 
 def test_routes_absent_when_disabled(monkeypatch):
@@ -79,6 +81,60 @@ def test_route_seeds_its_extraction_into_the_graph(monkeypatch):
     _client().post("/agents/onboarding", json={"text": "backend engineer"})
     assert seen["role"] == "backend-eng"
     assert seen["extra_tools"] == []
+
+
+def test_idempotency_key_is_keyed_off_raw_text_not_model_output(monkeypatch):
+    """The model is probabilistic: keying the Case off its OUTPUT means a re-clicked
+    submit that extracts differently gets a different key and forks a SECOND Case for
+    the same intent. The raw text is the only deterministic thing the user gave us."""
+    k1 = onboarding_agent._idempotency_key({}, "a@gsvh.test", "backend engineer, plus figma")
+    k2 = onboarding_agent._idempotency_key({}, "a@gsvh.test", "backend engineer, plus figma")
+    assert k1 == k2
+    assert k1 != onboarding_agent._idempotency_key({}, "a@gsvh.test", "data engineer")
+    assert k1 != onboarding_agent._idempotency_key({}, "b@gsvh.test", "backend engineer, plus figma")
+
+
+def test_duplicate_submit_returns_the_existing_case_without_extracting_or_invoking_the_graph(monkeypatch):
+    """Ref1 §4 'fake resume': the old route re-invoked the graph from START on a thread
+    that was already interrupted at the approval gate — re-running nodes and appending
+    checkpoints. A Case that already exists is READ, never re-driven."""
+    _enable(monkeypatch)
+    calls = {"extract": 0, "graph": 0, "create": 0}
+    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
+                        lambda t: calls.update(extract=calls["extract"] + 1) or
+                        {"role": "backend-eng", "extra_tools": []})
+    monkeypatch.setattr(onboarding_agent, "create_case",
+                        lambda *a, **k: calls.update(create=calls["create"] + 1) or
+                        {"case_id": "cid", "status": "draft"})
+    monkeypatch.setattr(onboarding_agent, "start_case",
+                        lambda *a, **k: calls.update(graph=calls["graph"] + 1) or
+                        {"case_id": "cid", "status": "pending_approval"})
+    monkeypatch.setattr(onboarding_agent, "get_case_by_idempotency_key", lambda key: {
+        "case_id": "cid", "status": "pending_approval", "role": "backend-eng",
+        "tools": ["github", "aws"], "approver_email": "manager@gsvh.test"})
+
+    r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["case_id"] == "cid" and body["status"] == "pending_approval"
+    assert body["tools"] == ["github", "aws"]
+    assert calls == {"extract": 0, "graph": 0, "create": 0}
+
+
+def test_a_racing_duplicate_that_slips_past_the_lookup_still_never_re_enters_the_graph(monkeypatch):
+    """Two concurrent submits both miss the pre-check; the UNIQUE key makes create_case
+    return the existing non-draft row. The status guard is the second line of defence."""
+    _enable(monkeypatch)
+    started = []
+    monkeypatch.setattr(onboarding_agent, "create_case", lambda *a, **k: {
+        "case_id": "cid", "status": "pending_approval", "role": "backend-eng",
+        "tools": ["github"], "approver_email": "manager@gsvh.test"})
+    monkeypatch.setattr(onboarding_agent, "start_case",
+                        lambda *a, **k: started.append(k) or {"case_id": "cid", "status": "x"})
+    r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
+    assert r.json()["status"] == "pending_approval"
+    assert started == []
 
 
 def test_unparseable_request_is_422_and_creates_no_case(monkeypatch):
