@@ -18,17 +18,18 @@ import hashlib
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.core.auth import get_current_user, require_role
 from backend.core.config import ONBOARDING_AGENT_ENABLED
 from backend.core.onboarding_case import (
     create_case,
     get_case,
+    get_case_by_idempotency_key,
     list_audit,
     list_dead_letter,
     transition,
 )
 from backend.core.tools.principal import principal_from_user
 from backend.core.write.breaker import get_breaker, reset_breaker
+from backend.routes.deps import traced_role, traced_user
 from backend.services.onboarding_extract import OnboardingExtractError, extract_onboarding_fields
 from backend.services.onboarding_graph import CONNECTOR, replay_case, resume_case, start_case
 from backend.services.onboarding_validator import validate_onboarding
@@ -56,27 +57,46 @@ def _guard() -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
-def _idempotency_key(body: dict, email: str, role: str, tools: list[str]) -> str:
-    """Client-supplied intent key (primary), else a content hash over email:role:tools
-    (defense-in-depth — a double-clicked 'start onboarding' must not open two Cases)."""
+def _idempotency_key(body: dict, email: str, text: str) -> str:
+    """Client-supplied intent key (primary), else a content hash over email:RAW TEXT.
+
+    Keyed off the raw text, never the model's output: extraction is probabilistic, so a
+    re-clicked submit that extracts even slightly differently would hash to a different
+    key and fork a SECOND Case for the same intent. The text is the one deterministic
+    thing the user actually gave us."""
     supplied = (body.get("idempotency_key") or "").strip()
     if supplied:
         return supplied
-    raw = "|".join([email, role, ",".join(sorted(tools))])
+    raw = "|".join([email or "", text])
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _existing(case: dict) -> dict:
+    """Answer a duplicate submit from the row that already exists."""
+    return {"case_id": str(case["case_id"]), "status": case["status"],
+            "role": case.get("role"), "tools": case.get("tools"),
+            "approver_email": case.get("approver_email")}
+
+
 @router.post("")
-async def start_onboarding(request: Request, user: dict = Depends(get_current_user)):
+async def start_onboarding(request: Request, user: dict = Depends(traced_user)):
     _guard()
     principal = principal_from_user(user)
     body = await request.json()
     text = body["text"]
+    idem = _idempotency_key(body, principal.email, text)
 
-    # The ONE extraction for this Case. Its output becomes the idempotency key, the Case
-    # row, and the graph's seeded state — so the tools the manager approves are exactly
-    # the tools the connector grants. A model that returns nothing usable ends the request
-    # HERE, before a Case exists: no half-built Case, no unhandled exception.
+    # Duplicate submit: the Case already exists and is already moving. READ it, never
+    # re-drive it — re-invoking the graph on a thread parked at the approval gate re-runs
+    # nodes and appends checkpoints (Ref1 §4's "fake resume"). Also saves the LLM call.
+    dup = get_case_by_idempotency_key(idem)
+    if dup is not None and dup["status"] != "draft":
+        return _existing(dup)
+
+    # The ONE extraction for this Case. Its output becomes the Case row and the graph's
+    # seeded state — so the tools the manager approves are exactly the tools the connector
+    # grants. A model that returns nothing usable ends the request HERE, before a Case
+    # exists: no half-built Case, no unhandled exception.
     try:
         fields = extract_onboarding_fields(text)
     except OnboardingExtractError as exc:
@@ -85,9 +105,13 @@ async def start_onboarding(request: Request, user: dict = Depends(get_current_us
     verdict = validate_onboarding(fields["role"], fields["extra_tools"])
     approver_email = _HRIS.manager_email(principal) if _HRIS else None
 
-    idem = _idempotency_key(body, principal.email, fields["role"], verdict.tools)
     case = create_case(principal.email, approver_email, fields["role"], verdict.tools, idem)
     case_id = str(case["case_id"])
+
+    # Two submits can race past the lookup above; the UNIQUE key then makes create_case
+    # return the row the winner already advanced. Second line of defence, same rule.
+    if case["status"] != "draft":
+        return _existing(case)
 
     if not verdict.ok:
         row = transition(case_id, "denied_policy", "system", verdict.reason or "validation failed")
@@ -108,7 +132,7 @@ async def start_onboarding(request: Request, user: dict = Depends(get_current_us
 
 
 @router.post("/{case_id}/decision")
-async def decide_onboarding(case_id: str, request: Request, user: dict = Depends(get_current_user)):
+async def decide_onboarding(case_id: str, request: Request, user: dict = Depends(traced_user)):
     _guard()
     case = get_case(case_id)
     if case is None:
@@ -123,7 +147,7 @@ async def decide_onboarding(case_id: str, request: Request, user: dict = Depends
 
 
 @router.get("/{case_id}")
-def read_onboarding_case(case_id: str, user: dict = Depends(get_current_user)):
+def read_onboarding_case(case_id: str, user: dict = Depends(traced_user)):
     _guard()
     case = get_case(case_id)
     if case is None:
@@ -145,14 +169,14 @@ admin_router = APIRouter(prefix="/admin/onboarding", tags=["Onboarding Agent (ad
 
 
 @admin_router.get("/dead-letter")
-def list_dead_letter_cases(_: dict = Depends(require_role("hr"))):
+def list_dead_letter_cases(_: dict = Depends(traced_role("hr"))):
     """The DLQ. A query (WHERE status = 'dead_letter'), not a second table."""
     _guard()
     return {"cases": list_dead_letter()}
 
 
 @admin_router.post("/cases/{case_id}/replay")
-def replay_onboarding_case(case_id: str, user: dict = Depends(require_role("hr"))):
+def replay_onboarding_case(case_id: str, user: dict = Depends(traced_role("hr"))):
     """Resume a dead-lettered Case from its checkpoint. No re-extraction, no second
     approval, no forked audit log — and idempotency by case_id means a replay that
     races a late success cannot double-grant."""
@@ -167,7 +191,7 @@ def replay_onboarding_case(case_id: str, user: dict = Depends(require_role("hr")
 
 
 @admin_router.post("/breaker/reset")
-def reset_access_breaker(_: dict = Depends(require_role("hr"))):
+def reset_access_breaker(_: dict = Depends(traced_role("hr"))):
     """Explicit clearance for the access-provisioner breaker. Never time-based: a
     self-healing breaker silently re-enters the outage it exists to surface."""
     _guard()

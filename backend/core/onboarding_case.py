@@ -125,6 +125,19 @@ def create_case(employee_email, approver_email, role, tools, idempotency_key) ->
                 return dict(cursor.fetchone())
 
 
+def get_case_by_idempotency_key(idempotency_key: str) -> dict | None:
+    """Look a Case up by intent key. The route calls this BEFORE it extracts, so a
+    duplicate submit is answered from the row — no second LLM call, no second graph
+    invocation on a thread that is already parked at the approval gate."""
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                "SELECT * FROM onboarding_cases WHERE idempotency_key = %s", (idempotency_key,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
 def get_case(case_id: str) -> dict | None:
     with _connect() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:

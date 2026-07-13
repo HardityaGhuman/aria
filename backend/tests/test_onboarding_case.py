@@ -41,6 +41,16 @@ def test_idempotency_collision_returns_existing(store):
     assert str(a["case_id"]) == str(b["case_id"])
 
 
+def test_lookup_by_idempotency_key(store):
+    """The route checks for an existing Case BEFORE it extracts, so a duplicate submit
+    costs neither an LLM call nor a second graph invocation."""
+    key = _idem()
+    row = _mk(store, key)
+    found = store.get_case_by_idempotency_key(key)
+    assert str(found["case_id"]) == str(row["case_id"])
+    assert store.get_case_by_idempotency_key("onb-idem-nothing-here") is None
+
+
 def test_legal_path_to_provisioned(store):
     cid = str(_mk(store)["case_id"])
     store.transition(cid, "pending_approval", "system", "awaiting approver")
