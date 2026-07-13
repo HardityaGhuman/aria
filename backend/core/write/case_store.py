@@ -17,6 +17,11 @@ values are always parameterized.
 """
 from dataclasses import dataclass
 
+# pyrefly: ignore [missing-import]
+import psycopg
+# pyrefly: ignore [missing-import]
+from psycopg.rows import dict_row
+
 from backend.core import db
 
 # The shared control statuses. Every agent has exactly these, plus one success word.
@@ -68,3 +73,105 @@ class CaseSpec:
 
 def _connect():
     return db.pooled(lambda: WriteCaseError("Could not connect to PostgreSQL for write cases."))
+
+
+def create_case(spec: CaseSpec, employee_email: str, approver_email: str | None,
+                idempotency_key: str, **business) -> dict:
+    """Insert a draft Case + its 'drafted' audit row in ONE transaction. On an
+    idempotency_key collision return the existing row — no second Case, no second audit
+    row, no second graph run."""
+    cols = ["employee_email", "approver_email", "idempotency_key", *business.keys()]
+    values = [employee_email, approver_email, idempotency_key, *business.values()]
+    placeholders = ", ".join(["%s"] * len(cols))
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            try:
+                cursor.execute(
+                    f"INSERT INTO {spec.table} ({', '.join(cols)}) "
+                    f"VALUES ({placeholders}) RETURNING *",
+                    tuple(values),
+                )
+                row = dict(cursor.fetchone())
+                cursor.execute(
+                    f"INSERT INTO {spec.audit_table} (case_id, event, actor_id, detail) "
+                    f"VALUES (%s, %s, %s, %s)",
+                    (row["case_id"], "drafted", employee_email, spec.agent),
+                )
+                return row
+            except psycopg.errors.UniqueViolation:
+                connection.rollback()
+                cursor.execute(
+                    f"SELECT * FROM {spec.table} WHERE idempotency_key = %s", (idempotency_key,)
+                )
+                return dict(cursor.fetchone())
+
+
+def get_case(spec: CaseSpec, case_id: str) -> dict | None:
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(f"SELECT * FROM {spec.table} WHERE case_id = %s", (case_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
+def get_by_idempotency_key(spec: CaseSpec, idempotency_key: str) -> dict | None:
+    """The route calls this BEFORE it extracts: a duplicate submit costs neither an LLM
+    call nor a second graph invocation on a thread already parked at the approval gate."""
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"SELECT * FROM {spec.table} WHERE idempotency_key = %s", (idempotency_key,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
+def transition(spec: CaseSpec, case_id: str, new_status: str, actor_id: str, detail: str,
+               **result) -> dict:
+    """Move a Case iff the move is legal, writing the audit row in the SAME transaction so
+    status and audit can never diverge. `**result` carries agent-specific columns
+    (confirmation_id / issue_key / grant_id) plus the control columns attempt /
+    failure_reason; each is COALESCEd, so a later transition never erases an earlier value.
+    Raises WriteCaseError on an illegal or unknown-case move."""
+    allowed_result_cols = {spec.result_column, "attempt", "failure_reason"}
+    unknown = set(result) - allowed_result_cols
+    if unknown:
+        raise WriteCaseError(f"unknown result column(s) for {spec.agent}: {sorted(unknown)}")
+
+    sets = ", ".join(f"{col} = COALESCE(%s, {col})" for col in result)
+    set_clause = f"status = %s, {sets}, updated_at = now()" if result else \
+                 "status = %s, updated_at = now()"
+
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"SELECT status FROM {spec.table} WHERE case_id = %s FOR UPDATE", (case_id,)
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise WriteCaseError(f"no such case {case_id}")
+            cur_status = current["status"]
+            if new_status not in spec.legal_transitions().get(cur_status, set()):
+                raise WriteCaseError(f"illegal transition {cur_status} -> {new_status}")
+            cursor.execute(
+                f"UPDATE {spec.table} SET {set_clause} WHERE case_id = %s RETURNING *",
+                (new_status, *result.values(), case_id),
+            )
+            row = dict(cursor.fetchone())
+            cursor.execute(
+                f"INSERT INTO {spec.audit_table} (case_id, event, actor_id, detail) "
+                f"VALUES (%s, %s, %s, %s)",
+                (case_id, new_status, actor_id, detail),
+            )
+            return row
+
+
+def list_audit(spec: CaseSpec, case_id: str) -> list[dict]:
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"SELECT event, actor_id, detail, created_at FROM {spec.audit_table} "
+                f"WHERE case_id = %s ORDER BY id",
+                (case_id,),
+            )
+            return [dict(r) for r in cursor.fetchall()]
