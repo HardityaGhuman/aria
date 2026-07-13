@@ -14,7 +14,13 @@ from backend.routes.admin import router as admin_router
 from backend.routes.me import router as me_router
 from backend.core.preferences import initialize_preferences_table
 from backend.core.chat_memory import initialize_chat_memory
-from backend.core.config import FRONTEND_ORIGIN, JIRA_AGENT_ENABLED, LEAVE_AGENT_ENABLED, require_jwt_secret
+from backend.core.config import (
+    FRONTEND_ORIGIN,
+    JIRA_AGENT_ENABLED,
+    LEAVE_AGENT_ENABLED,
+    ONBOARDING_AGENT_ENABLED,
+    require_jwt_secret,
+)
 from backend.core.doc_status import initialize_doc_status_table
 from backend.core.errors import register_error_handlers
 from backend.core.ratelimit import limiter, rate_limit_handler
@@ -110,6 +116,24 @@ async def startup_event():
         set_jira_graph(jira_graph)
         logger.info("Jira write agent ready (JIRA_AGENT_ENABLED=true).")
 
+    if ONBOARDING_AGENT_ENABLED:
+        from backend.core.access.mock import MockAccessProvisioner
+        from backend.core.hris.mock import MockHRIS
+        from backend.core.onboarding_case import initialize_onboarding_case_tables
+        from backend.routes.onboarding_agent import set_graph as set_onboarding_graph
+        from backend.routes.onboarding_agent import set_hris as set_onboarding_hris
+        from backend.services.leave_checkpointer import get_checkpointer
+        from backend.services.onboarding_graph import build_onboarding_graph
+
+        initialize_onboarding_case_tables()
+        # The SHARED process-wide PostgresSaver — a third thread_id namespace
+        # (onboarding-case-*) on it, not a third checkpointer.
+        onboarding_graph = build_onboarding_graph(
+            provisioner=MockAccessProvisioner(), checkpointer=get_checkpointer())
+        set_onboarding_graph(onboarding_graph)
+        set_onboarding_hris(MockHRIS())
+        logger.info("Onboarding write agent ready (ONBOARDING_AGENT_ENABLED=true).")
+
     chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
@@ -125,9 +149,9 @@ async def shutdown_event():
     """Close the DB connection pool so its worker threads stop cleanly."""
     from backend.core.db import close_pool
     close_pool()
-    # One process-wide checkpointer, shared by both write agents — close it if
-    # EITHER opened it.
-    if LEAVE_AGENT_ENABLED or JIRA_AGENT_ENABLED:
+    # One process-wide checkpointer, shared by all three write agents — close it if
+    # ANY of them opened it.
+    if LEAVE_AGENT_ENABLED or JIRA_AGENT_ENABLED or ONBOARDING_AGENT_ENABLED:
         from backend.services.leave_checkpointer import close_checkpointer
         close_checkpointer()
 
@@ -145,6 +169,12 @@ if LEAVE_AGENT_ENABLED:
 if JIRA_AGENT_ENABLED:
     from backend.routes.jira_agent import router as jira_agent_router
     app.include_router(jira_agent_router)
+
+if ONBOARDING_AGENT_ENABLED:
+    from backend.routes.onboarding_agent import admin_router as onboarding_admin_router
+    from backend.routes.onboarding_agent import router as onboarding_agent_router
+    app.include_router(onboarding_agent_router)
+    app.include_router(onboarding_admin_router)
 
 @app.get("/health")
 def health_check():

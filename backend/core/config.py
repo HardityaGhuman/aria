@@ -127,6 +127,15 @@ def _parse_approver_map(raw: str) -> dict:
 
 JIRA_PROJECT_APPROVERS = _parse_approver_map(os.getenv("JIRA_PROJECT_APPROVERS", ""))
 
+# --- Write Slice 3: onboarding agent + write-boundary reliability ---------------
+# Kill switch: off => routes are not mounted and openapi.json is unchanged.
+ONBOARDING_AGENT_ENABLED = os.getenv("ONBOARDING_AGENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# Bounded retry budget at the write boundary. Transient failures only; a retried
+# attempt is safe because every write tool is idempotent by case_id.
+WRITE_MAX_ATTEMPTS = int(os.getenv("WRITE_MAX_ATTEMPTS", "3"))
+# Consecutive transient failures before a connector's breaker opens.
+WRITE_BREAKER_THRESHOLD = int(os.getenv("WRITE_BREAKER_THRESHOLD", "3"))
+
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
 # so tests and tooling can import config without a secret present. The server

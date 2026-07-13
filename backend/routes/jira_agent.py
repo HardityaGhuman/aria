@@ -11,10 +11,10 @@ import hashlib
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.core.auth import get_current_user
 from backend.core.config import JIRA_AGENT_ENABLED, JIRA_ALLOWED_PROJECTS, JIRA_PROJECT_APPROVERS
 from backend.core.jira_case import create_case, get_case, transition
 from backend.core.tools.principal import principal_from_user
+from backend.routes.deps import traced_user
 from backend.services.jira_extract import extract_jira_fields
 from backend.services.jira_graph import resume_case, start_case
 
@@ -47,7 +47,7 @@ def _idempotency_key(body: dict, email: str, fields: dict) -> str:
 
 
 @router.post("")
-async def start_jira(request: Request, user: dict = Depends(get_current_user)):
+async def start_jira(request: Request, user: dict = Depends(traced_user)):
     _guard()
     principal = principal_from_user(user)
     body = await request.json()
@@ -76,7 +76,7 @@ async def start_jira(request: Request, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{case_id}/decision")
-async def decide_jira(case_id: str, request: Request, user: dict = Depends(get_current_user)):
+async def decide_jira(case_id: str, request: Request, user: dict = Depends(traced_user)):
     _guard()
     case = get_case(case_id)
     if case is None:
