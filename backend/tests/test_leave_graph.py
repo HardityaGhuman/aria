@@ -43,6 +43,8 @@ def _graph(store, hris=None, saver=None):
     return lg.build_leave_graph(
         hris=hris, checkpointer=saver or InMemorySaver(), extract_fn=_extract_ok,
         case_store=store, today=date(2026, 8, 1),
+        # The graph reloads identity per node; stub the loader so these stay DB-free.
+        principal_loader=lambda user_id: _p(),
     )
 
 
