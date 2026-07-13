@@ -63,7 +63,7 @@ async def start_jira(request: Request, user: dict = Depends(traced_user)):
 
     # Undetermined project, or a known project with no approver mapped -> unroutable
     # before the gate. A project NOT in the allowlist falls through to the graph, whose
-    # validator ends it at denied_validation (no silent cross-team routing either way).
+    # validator ends it at denied_policy (no silent cross-team routing either way).
     if not project or (project in JIRA_ALLOWED_PROJECTS and approver_email is None):
         row = transition(case_id, "unroutable", "system",
                          "no project determined" if not project else "no approver mapped")

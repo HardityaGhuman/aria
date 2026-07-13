@@ -73,9 +73,9 @@ def build_jira_graph(*, jira: JiraClient | None = None, checkpointer, extract_fn
         return {"validation_ok": r.ok, "validation_reason": r.reason}
 
     def deny_validation(state: JiraState) -> dict:
-        case_store.transition(state["case_id"], "denied_validation", "system",
+        case_store.transition(state["case_id"], "denied_policy", "system",
                               state.get("validation_reason") or "validation failed")
-        return {"status": "denied_validation"}
+        return {"status": "denied_policy"}
 
     def request_approval(state: JiraState) -> dict:
         # Pre-interrupt work MUST be idempotent: on resume this node re-runs from here.
@@ -112,9 +112,9 @@ def build_jira_graph(*, jira: JiraClient | None = None, checkpointer, extract_fn
         return {"status": "created", "issue_key": result.data["issue_key"]}
 
     def deny_approver(state: JiraState) -> dict:
-        case_store.transition(state["case_id"], "denied_approver",
+        case_store.transition(state["case_id"], "denied_manager",
                               state.get("decision_actor") or "approver", "denied by approver")
-        return {"status": "denied_approver"}
+        return {"status": "denied_manager"}
 
     # --- routers (pure functions, exhaustive) ---
     def after_validate(state: JiraState) -> str:

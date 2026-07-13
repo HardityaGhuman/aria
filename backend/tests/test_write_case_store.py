@@ -113,3 +113,45 @@ def test_dead_letter_is_replayable_back_to_approved():
                           attempt=3, failure_reason="transient")
     back = case_store.transition(LEAVE, cid, "approved", "hr@t.test", "replay")
     assert back["status"] == "approved"
+
+
+@pg
+def test_jira_migration_drops_risk_tier_and_renames_the_denied_statuses():
+    """risk_tier was never read or written — a column nothing reads is a lie about the
+    system. And jira spoke a private dialect (denied_validation/denied_approver) that no
+    cross-agent DLQ or UI could group on."""
+    from backend.core import db, jira_case
+    jira_case.initialize_jira_case_tables()
+    with db.pooled(lambda: AssertionError("no pg")) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'jira_cases'")
+            cols = {r[0] for r in cur.fetchall()}
+    assert "risk_tier" not in cols
+    assert {"attempt", "failure_reason"} <= cols
+    assert "dead_letter" in jira_case.JIRA_SPEC.statuses()
+    assert jira_case.JIRA_SPEC.legal_transitions()["draft"] == {
+        "pending_approval", "denied_policy", "unroutable"}
+
+
+@pg
+def test_leave_gains_the_reliability_columns_and_dead_letter():
+    from backend.core import db, leave_case
+    leave_case.initialize_leave_case_tables()
+    with db.pooled(lambda: AssertionError("no pg")) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'leave_cases'")
+            cols = {r[0] for r in cur.fetchall()}
+    assert {"attempt", "failure_reason"} <= cols
+    assert "dead_letter" in leave_case.LEAVE_SPEC.statuses()
+
+
+@pg
+def test_initialize_is_re_runnable():
+    """Startup DDL runs on every boot. If it is not idempotent, the second boot dies."""
+    from backend.core import jira_case, leave_case, onboarding_case
+    for _ in range(2):
+        leave_case.initialize_leave_case_tables()
+        jira_case.initialize_jira_case_tables()
+        onboarding_case.initialize_onboarding_case_tables()

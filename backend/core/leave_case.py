@@ -3,44 +3,41 @@
 Our workflow-state projection of a leave request — NOT the booking, NOT the balance
 (those live in the HRIS). Two tables: ``leave_cases`` (queryable status) and
 ``leave_case_audit`` (append-only, immutable transition log). Distinct from the
-LangGraph checkpointer (the graph's resume state); same split as
-ingestion_jobs vs document_status.
+LangGraph checkpointer (the graph's resume state).
 
-The state machine is enforced here: ``transition`` rejects any status change not in
-LEGAL_TRANSITIONS, and writes the audit row in the SAME transaction as the status
-update, so status and audit can never diverge."""
-from dataclasses import dataclass
-
-# pyrefly: ignore [missing-import]
-import psycopg
-# pyrefly: ignore [missing-import]
-from psycopg.rows import dict_row
-
+The lifecycle and the transition engine now live in ``core/write/case_store.py``; this
+module owns only the table shape, the agent's spec, and the typed business columns. That
+is the retrofit: Leave used to dead-end at ``write_failed`` on the first connector error
+because its hand-written transition table had nowhere else to go — no ``dead_letter``, so
+no DLQ, so a network blip destroyed an approved request permanently.
+"""
 from backend.core import db
+from backend.core.write import case_store
+from backend.core.write.case_store import CaseSpec, WriteCaseError
 
-# Exhaustive, one-way lifecycle. Terminal statuses map to an empty set.
-LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "draft": {"pending_approval", "denied_policy", "unroutable"},
-    "pending_approval": {"approved", "denied_manager"},
-    "approved": {"booked", "write_failed"},
-    "denied_policy": set(),
-    "denied_manager": set(),
-    "booked": set(),
-    "write_failed": set(),
-    "unroutable": set(),
-}
+LEAVE_SPEC = CaseSpec(
+    agent="leave",
+    table="leave_cases",
+    audit_table="leave_case_audit",
+    success_status="booked",
+    result_column="confirmation_id",
+    summary_columns=("start_date", "end_date", "days", "reason"),
+)
 
-
-@dataclass
-class LeaveCaseError(Exception):
-    message: str
+# Back-compat aliases: callers and tests still import these names.
+LeaveCaseError = WriteCaseError
+LEGAL_TRANSITIONS = LEAVE_SPEC.legal_transitions()
 
 
 def _connect():
-    return db.pooled(lambda: LeaveCaseError("Could not connect to PostgreSQL for leave cases."))
+    return db.pooled(lambda: WriteCaseError("Could not connect to PostgreSQL for leave cases."))
 
 
 def initialize_leave_case_tables() -> None:
+    """Idempotent startup DDL — re-runnable on every boot. The ALTERs are the migration:
+    Leave predates the write-boundary reliability layer, so it lacks the control columns
+    (attempt / failure_reason) and the dead_letter status the retry edge needs."""
+    statuses = ", ".join(f"'{s}'" for s in LEAVE_SPEC.statuses())
     with _connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -53,16 +50,26 @@ def initialize_leave_case_tables() -> None:
                     end_date        DATE NOT NULL,
                     days            INT  NOT NULL,
                     reason          TEXT,
-                    status          TEXT NOT NULL DEFAULT 'draft'
-                        CHECK (status IN ('draft','pending_approval','denied_policy',
-                                          'approved','denied_manager','booked',
-                                          'write_failed','unroutable')),
+                    status          TEXT NOT NULL DEFAULT 'draft',
                     idempotency_key TEXT NOT NULL UNIQUE,
                     confirmation_id TEXT,
+                    attempt         INTEGER NOT NULL DEFAULT 0,
+                    failure_reason  TEXT,
                     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cursor.execute(
+                "ALTER TABLE leave_cases ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 0"
+            )
+            cursor.execute("ALTER TABLE leave_cases ADD COLUMN IF NOT EXISTS failure_reason TEXT")
+            cursor.execute(
+                "ALTER TABLE leave_cases DROP CONSTRAINT IF EXISTS leave_cases_status_check"
+            )
+            cursor.execute(
+                f"ALTER TABLE leave_cases ADD CONSTRAINT leave_cases_status_check "
+                f"CHECK (status IN ({statuses}))"
             )
             cursor.execute(
                 """
@@ -79,79 +86,35 @@ def initialize_leave_case_tables() -> None:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_leave_case_audit_case ON leave_case_audit (case_id, id)"
             )
+            # The DLQ is a query, so give it an index.
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_leave_cases_status ON leave_cases (status)"
+            )
 
 
-def create_case(employee_email, approver_email, start_date, end_date, days, reason, idempotency_key) -> dict:
-    """Insert a draft Case. On idempotency_key collision, return the existing row
-    (no second draft, no second audit row)."""
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO leave_cases
-                        (employee_email, approver_email, start_date, end_date, days, reason, idempotency_key)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (employee_email, approver_email, start_date, end_date, days, reason, idempotency_key),
-                )
-                row = dict(cursor.fetchone())
-                cursor.execute(
-                    "INSERT INTO leave_case_audit (case_id, event, actor_id, detail) VALUES (%s,%s,%s,%s)",
-                    (row["case_id"], "drafted", employee_email, f"{days}d {start_date}..{end_date}"),
-                )
-                return row
-            except psycopg.errors.UniqueViolation:
-                connection.rollback()
-                cursor.execute("SELECT * FROM leave_cases WHERE idempotency_key = %s", (idempotency_key,))
-                return dict(cursor.fetchone())
+def create_case(employee_email, approver_email, start_date, end_date, days, reason,
+                idempotency_key) -> dict:
+    return case_store.create_case(
+        LEAVE_SPEC, employee_email, approver_email, idempotency_key,
+        start_date=start_date, end_date=end_date, days=days, reason=reason,
+    )
 
 
 def get_case(case_id: str) -> dict | None:
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("SELECT * FROM leave_cases WHERE case_id = %s", (case_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+    return case_store.get_case(LEAVE_SPEC, case_id)
 
 
-def transition(case_id, new_status, actor_id, detail, *, confirmation_id=None) -> dict:
-    """Move a Case to new_status iff the transition is legal, appending an audit row
-    in the same transaction. Raises LeaveCaseError on an illegal or unknown-case move."""
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("SELECT status FROM leave_cases WHERE case_id = %s FOR UPDATE", (case_id,))
-            current = cursor.fetchone()
-            if current is None:
-                raise LeaveCaseError(f"no such case {case_id}")
-            cur_status = current["status"]
-            if new_status not in LEGAL_TRANSITIONS.get(cur_status, set()):
-                raise LeaveCaseError(f"illegal transition {cur_status} -> {new_status}")
-            cursor.execute(
-                """
-                UPDATE leave_cases
-                SET status = %s,
-                    confirmation_id = COALESCE(%s, confirmation_id),
-                    updated_at = now()
-                WHERE case_id = %s
-                RETURNING *
-                """,
-                (new_status, confirmation_id, case_id),
-            )
-            row = dict(cursor.fetchone())
-            cursor.execute(
-                "INSERT INTO leave_case_audit (case_id, event, actor_id, detail) VALUES (%s,%s,%s,%s)",
-                (case_id, new_status, actor_id, detail),
-            )
-            return row
+def get_case_by_idempotency_key(idempotency_key: str) -> dict | None:
+    return case_store.get_by_idempotency_key(LEAVE_SPEC, idempotency_key)
+
+
+def transition(case_id, new_status, actor_id, detail, *, confirmation_id=None,
+               attempt=None, failure_reason=None) -> dict:
+    return case_store.transition(
+        LEAVE_SPEC, case_id, new_status, actor_id, detail,
+        confirmation_id=confirmation_id, attempt=attempt, failure_reason=failure_reason,
+    )
 
 
 def list_audit(case_id: str) -> list[dict]:
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                "SELECT event, actor_id, detail, created_at FROM leave_case_audit WHERE case_id = %s ORDER BY id",
-                (case_id,),
-            )
-            return [dict(r) for r in cursor.fetchall()]
+    return case_store.list_audit(LEAVE_SPEC, case_id)
