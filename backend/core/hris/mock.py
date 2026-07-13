@@ -20,12 +20,17 @@ _SEED = {
 
 
 class MockHRIS:
-    def __init__(self, seed: dict | None = None) -> None:
+    def __init__(self, seed: dict | None = None, fail_times: int = 0,
+                 fail_with: type[Exception] | None = None) -> None:
         # Copy so a test mutating rows can't bleed into another test.
         source = _SEED if seed is None else seed
         self._rows = {email: dict(row) for email, row in source.items()}
         # case_id -> {"confirmation_id", "email", "days"} — idempotency ledger.
         self._bookings: dict[str, dict] = {}
+        # Failure injection (mirrors MockAccessProvisioner): lets the graph tests drive
+        # transient-then-success, budget exhaustion, and breaker-open with no network.
+        self._fail_remaining = fail_times
+        self._fail_with = fail_with
 
     def get_balance(self, principal: Principal) -> dict | None:
         row = self._rows.get(principal.email) if principal.email else None
@@ -42,6 +47,12 @@ class MockHRIS:
     def submit_leave(
         self, principal: Principal, case_id: str, start_date: str, end_date: str, days: int
     ) -> dict:
+        # Injection runs AHEAD of the idempotency check: a connector that fails before it
+        # commits is exactly the transient case the retry edge exists for.
+        if self._fail_remaining > 0 and self._fail_with is not None:
+            self._fail_remaining -= 1
+            raise self._fail_with(f"injected failure for case {case_id}")
+
         # Idempotent replay: same case_id -> same confirmation, no second decrement.
         prior = self._bookings.get(case_id)
         if prior is not None:
