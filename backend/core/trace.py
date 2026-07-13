@@ -87,13 +87,18 @@ def reset_trace(token: contextvars.Token) -> None:
     _current.reset(token)
 
 
-def _emit(record: dict) -> None:
+def emit_record(record: dict) -> None:
+    """Emit one JSON telemetry record. Best-effort: a logging fault never breaks a
+    request. Public because core/write/trace.py is a second emitter on this sink."""
     if not config.TELEMETRY_ENABLED:
         return
     try:
         _telemetry_logger.info(json.dumps(record, ensure_ascii=False))
     except Exception:
         pass  # telemetry is best-effort; never break the request
+
+
+_emit = emit_record  # legacy alias: emit_span / emit_request_trace call this
 
 
 def emit_span(
