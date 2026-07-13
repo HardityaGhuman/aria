@@ -25,15 +25,17 @@ from langgraph.types import Command, interrupt
 from backend.core import leave_case as leave_case_store
 from backend.core.hris import HRISClient
 from backend.core.hris.mock import MockHRIS
-from backend.core.tools.principal import Principal
+from backend.core.tools.principal import load_principal
 from backend.core.tools.submit_leave import SubmitLeaveTool
 from backend.services.leave_extract import extract_leave_fields
 from backend.services.leave_validator import validate_leave
 
+_IDENTITY_GONE = "requester no longer exists"
+
 
 class LeaveState(TypedDict, total=False):
     case_id: str
-    principal: Principal          # server-built, never from LLM
+    user_id: int                  # identity ANCHOR only — the Principal is reloaded per node
     raw_text: str                 # the only LLM input
     approver_email: str | None
     start_date: str
@@ -59,10 +61,12 @@ def thread_config(case_id: str) -> dict:
 
 
 def build_leave_graph(*, hris: HRISClient | None = None, checkpointer, extract_fn=None,
-                      submit_tool=None, case_store=leave_case_store, today: date | None = None) -> LeaveGraph:
+                      submit_tool=None, case_store=leave_case_store, today: date | None = None,
+                      principal_loader=None) -> LeaveGraph:
     hris = hris or MockHRIS()
     extract_fn = extract_fn or extract_leave_fields
     submit_tool = submit_tool or SubmitLeaveTool(hris)
+    principal_loader = principal_loader or load_principal
 
     def extract(state: LeaveState) -> dict:
         fields = extract_fn(state["raw_text"])
@@ -70,7 +74,10 @@ def build_leave_graph(*, hris: HRISClient | None = None, checkpointer, extract_f
                 "reason": fields["reason"]}
 
     def validate(state: LeaveState) -> dict:
-        r = validate_leave(state["principal"], hris, state["start_date"], state["end_date"], today=today)
+        principal = principal_loader(state["user_id"])
+        if principal is None:
+            return {"validation_ok": False, "validation_reason": _IDENTITY_GONE, "days": 0}
+        r = validate_leave(principal, hris, state["start_date"], state["end_date"], today=today)
         return {"validation_ok": r.ok, "validation_reason": r.reason, "days": r.days}
 
     def deny_policy(state: LeaveState) -> dict:
@@ -93,10 +100,16 @@ def build_leave_graph(*, hris: HRISClient | None = None, checkpointer, extract_f
 
     def book(state: LeaveState) -> dict:
         case_store.transition(state["case_id"], "approved", state.get("decision_actor") or "manager", "approved")
+        # Identity is reloaded HERE, after the sleep: never write under the role/region the
+        # requester had when the Case was filed. Gone user ⇒ fail closed, no booking.
+        principal = principal_loader(state["user_id"])
+        if principal is None:
+            case_store.transition(state["case_id"], "write_failed", "system", _IDENTITY_GONE)
+            return {"status": "write_failed"}
         result = submit_tool.invoke(
             {"case_id": state["case_id"], "start_date": state["start_date"],
              "end_date": state["end_date"], "days": state["days"]},
-            state["principal"],
+            principal,
         )
         if result.status != "ok":
             case_store.transition(state["case_id"], "write_failed", "system", result.error or "write failed")
@@ -139,7 +152,7 @@ def start_case(graph: LeaveGraph, *, case_id, principal, raw_text, approver_emai
     """Run the graph to its interrupt (pending_approval) or a terminal denial."""
     store = case_store or graph.case_store
     graph.compiled.invoke(
-        {"case_id": case_id, "principal": principal, "raw_text": raw_text,
+        {"case_id": case_id, "user_id": principal.user_id, "raw_text": raw_text,
          "approver_email": approver_email},
         thread_config(case_id),
     )

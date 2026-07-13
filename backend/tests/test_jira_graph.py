@@ -40,6 +40,8 @@ def _graph(store, jira=None, saver=None, extract_fn=_extract_ok):
     return jg.build_jira_graph(
         jira=jira or MockJira(projects=["MARKETING"]), checkpointer=saver or InMemorySaver(),
         extract_fn=extract_fn, case_store=store,
+        # The graph reloads identity per node; stub the loader so these stay DB-free.
+        principal_loader=lambda user_id: _p(),
     )
 
 
