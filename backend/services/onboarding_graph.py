@@ -28,11 +28,18 @@ from backend.core import onboarding_case as onboarding_case_store
 from backend.core.access import AccessProvisioner
 from backend.core.access.mock import MockAccessProvisioner
 from backend.core.config import WRITE_MAX_ATTEMPTS
+from backend.core.onboarding_case import ONBOARDING_SPEC
 from backend.core.tools.grant_access import GrantAccessTool
 from backend.core.tools.principal import load_principal
 from backend.core.write import trace as wt
 from backend.core.write.breaker import get_breaker
-from backend.core.write.errors import classify_write_error
+from backend.core.write.node import (
+    WriteSpec,
+    adapt_store,
+    make_terminal_nodes,
+    make_write_node,
+    make_write_router,
+)
 from backend.services.onboarding_extract import extract_onboarding_fields
 from backend.services.onboarding_validator import validate_onboarding
 
@@ -138,133 +145,39 @@ def build_onboarding_graph(*, provisioner: AccessProvisioner | None = None, chec
                               state.get("decision_actor") or "manager", "denied by manager")
         return {"status": "denied_manager"}
 
-    def provision(state: OnboardingState) -> dict:
-        """The write boundary. Re-entered by the retry edge, so EVERYTHING here must be
-        idempotent: the approve-transition is status-guarded, and the grant itself is
-        idempotent by case_id (attempt 2 returns attempt 1's grant_id, never a second
-        grant). Each attempt is its own checkpoint — that is why retry is an edge and
-        not a for-loop."""
-        started = time.perf_counter()
-        wt.case_node_started(state["case_id"], "provision")
-        current = case_store.get_case(state["case_id"])
-        if current and current["status"] == "pending_approval":
-            case_store.transition(state["case_id"], "approved",
-                                  state.get("decision_actor") or "manager", "approved")
-
-        attempt = state.get("attempt", 0) + 1
-        past_errors = list(state.get("past_errors") or [])
-
-        # Identity is reloaded HERE, after the sleep: never write under the role/region
-        # the requester had when the Case was filed. Gone user => fail closed, no grant.
-        # NOTE: this branch does NOT transition the row — it classifies and lets the
-        # router send it to the `write_failed` node. Exactly ONE node writes each
-        # terminal status; two writers is how a state machine starts lying.
-        principal = principal_loader(state["user_id"])
-        if principal is None:
-            wt.case_node_completed(state["case_id"], "provision", "failed",
-                                   int((time.perf_counter() - started) * 1000))
-            return {"failure_class": "permanent", "attempt": attempt,
-                    "past_errors": past_errors + [_IDENTITY_GONE]}
-
-        # Breaker OPEN => do not touch the connector at all. Classify and let the router
-        # send it to the DLQ, where a human can replay once the connector is healthy.
-        # Automation halts; work is preserved.
-        if breaker.is_open():
-            wt.case_write_result(state["case_id"], attempt, "skipped", latency_ms=0,
-                                 failure_class="breaker_open")
-            wt.case_node_completed(state["case_id"], "provision", "failed",
-                                   int((time.perf_counter() - started) * 1000))
-            return {"failure_class": "breaker_open", "attempt": attempt,
-                    "past_errors": past_errors + ["breaker_open"]}
-
-        wt.case_write_attempted(state["case_id"], attempt, CONNECTOR)
-        try:
-            result = grant_tool.invoke(
-                {"case_id": state["case_id"], "tools": state["tools"]}, principal)
-        except Exception as exc:                      # the ONLY place a failure is classified
-            failure_class = classify_write_error(exc)
-            latency = int((time.perf_counter() - started) * 1000)
-            wt.case_write_result(state["case_id"], attempt, "failed", latency_ms=latency,
-                                 failure_class=failure_class)
-            if failure_class == "transient":
-                breaker.record_failure()
-            wt.case_node_completed(state["case_id"], "provision", "failed", latency)
-            return {"failure_class": failure_class, "attempt": attempt,
-                    "past_errors": past_errors + [f"{failure_class}: {type(exc).__name__}"]}
-
-        # EXECUTION IS NOT CORRECTNESS (Ref2 §3). The connector answering without raising
-        # is a mechanical fact, not a success. Verify the grant we got back IS the grant
-        # that was approved — a grant_id, and exactly the tool set on the Case row. A
-        # connector that returns "OK" with an empty or partial payload is the ref's
-        # canonical silent failure (200 OK, output: [], recorded as SUCCESS), and marking
-        # that `provisioned` would write a lie into the audit log. Permanent: a connector
-        # that mis-answers will mis-answer again; a human must look at it.
-        latency = int((time.perf_counter() - started) * 1000)
-        granted = set((result.data or {}).get("tools") or [])
-        if not (result.data or {}).get("grant_id") or granted != set(state["tools"]):
-            breaker.record_success()      # the connector RESPONDED; it is not flapping
-            wt.case_write_result(state["case_id"], attempt, "unverified", latency_ms=latency,
-                                 failure_class="permanent")
-            wt.case_node_completed(state["case_id"], "provision", "failed", latency)
-            return {"failure_class": "permanent", "attempt": attempt,
-                    "past_errors": past_errors + ["permanent: grant did not match request"]}
-
-        breaker.record_success()
-        wt.case_write_result(state["case_id"], attempt, "ok", latency_ms=latency)
-        case_store.transition(state["case_id"], "provisioned", "system", "granted",
-                              grant_id=result.data["grant_id"], attempt=attempt)
-        wt.case_node_completed(state["case_id"], "provision", "provisioned", latency)
-        return {"status": "provisioned", "grant_id": result.data["grant_id"],
-                "attempt": attempt, "failure_class": None}
-
-    def write_failed(state: OnboardingState) -> dict:
-        """Permanent failure. Terminal: the connector refused the request and always will.
-        A human files a new Case; replaying this one would just fail again."""
-        reason = (state.get("past_errors") or ["write failed"])[-1]
-        case_store.transition(state["case_id"], "write_failed", "system", reason,
-                              attempt=state.get("attempt"), failure_reason="permanent")
-        return {"status": "write_failed"}
-
-    def dead_letter(state: OnboardingState) -> dict:
-        """Transient failure that survived the budget, or an open breaker. NOT terminal:
-        the Case keeps its checkpoint and an admin can replay it (see replay_case)."""
-        failure_class = state.get("failure_class") or "transient"
-        reason = (state.get("past_errors") or ["transient failure"])[-1]
-        case_store.transition(state["case_id"], "dead_letter", "system", reason,
-                              attempt=state.get("attempt"), failure_reason=failure_class)
-        return {"status": "dead_letter"}
+    # The write boundary is no longer written here — it is THE shared one
+    # (`core/write/node.py`), which this node was the prototype for. Onboarding supplies
+    # only what is agent-specific: which connector, how to call it, and what "the write
+    # the human approved" means (a grant_id AND exactly the approved tool set — a
+    # connector answering "OK" with an empty or partial list has failed).
+    engine = adapt_store(case_store)
+    write_spec = WriteSpec(
+        connector=CONNECTOR,
+        invoke=lambda state, principal: grant_tool.invoke(
+            {"case_id": state["case_id"], "tools": state["tools"]}, principal),
+        verify=lambda result, state: bool((result.data or {}).get("grant_id"))
+        and set((result.data or {}).get("tools") or []) == set(state["tools"]),
+        success_status="provisioned",
+        result_field="grant_id",
+    )
+    write = make_write_node(write_spec, ONBOARDING_SPEC, breaker=breaker,
+                            principal_loader=principal_loader, store=engine)
+    after_write = make_write_router(max_attempts)
+    write_failed, dead_letter = make_terminal_nodes(ONBOARDING_SPEC, store=engine)
 
     # --- routers (pure functions, exhaustive) ---
     def after_validate(state: OnboardingState) -> str:
         return "request_approval" if state["validation_ok"] else "deny_policy"
 
     def after_approval(state: OnboardingState) -> str:
-        return "provision" if state.get("decision") == "approve" else "deny_manager"
-
-    def after_provision(state: OnboardingState) -> str:
-        """Pure, exhaustive. The retry decision lives HERE, in Python, never in a model.
-
-        Contract with the `provision` node: it writes the row ONLY on success (status
-        "provisioned"). Every failure path leaves `status` unset and sets `failure_class`,
-        so this router — and only this router — decides stop-vs-retry, and exactly one
-        node writes each terminal status."""
-        if state.get("status") == "provisioned":
-            return END                                   # provision already wrote the row
-        failure_class = state.get("failure_class")
-        if failure_class == "permanent":
-            return "write_failed"                        # never retry what will never work
-        if failure_class == "breaker_open":
-            return "dead_letter"                         # connector is out; don't spend budget
-        if state.get("attempt", 0) >= max_attempts:      # transient, budget spent
-            return "dead_letter"
-        return "provision"                               # transient, budget left -> retry
+        return "write" if state.get("decision") == "approve" else "deny_manager"
 
     g = StateGraph(OnboardingState)
     g.add_node("extract", extract)
     g.add_node("validate", validate)
     g.add_node("deny_policy", deny_policy)
     g.add_node("request_approval", request_approval)
-    g.add_node("provision", provision)
+    g.add_node("write", write)
     g.add_node("deny_manager", deny_manager)
     g.add_node("write_failed", write_failed)
     g.add_node("dead_letter", dead_letter)
@@ -273,9 +186,9 @@ def build_onboarding_graph(*, provisioner: AccessProvisioner | None = None, chec
     g.add_edge("extract", "validate")
     g.add_conditional_edges("validate", after_validate, ["request_approval", "deny_policy"])
     g.add_edge("deny_policy", END)
-    g.add_conditional_edges("request_approval", after_approval, ["provision", "deny_manager"])
-    g.add_conditional_edges("provision", after_provision,
-                            ["provision", "write_failed", "dead_letter", END])
+    g.add_conditional_edges("request_approval", after_approval, ["write", "deny_manager"])
+    g.add_conditional_edges("write", after_write,
+                            ["write", "write_failed", "dead_letter", END])
     g.add_edge("write_failed", END)
     g.add_edge("dead_letter", END)
     g.add_edge("deny_manager", END)
@@ -330,7 +243,7 @@ def replay_case(graph: OnboardingGraph, *, case_id, actor_id, case_store=None):
         graph.breaker.reset()
     store.transition(case_id, "approved", actor_id, "replay from dead_letter")
     graph.compiled.invoke(
-        Command(goto="provision", update={"attempt": 0, "failure_class": None, "past_errors": []}),
+        Command(goto="write", update={"attempt": 0, "failure_class": None, "past_errors": []}),
         thread_config(case_id),
     )
     return store.get_case(case_id)
