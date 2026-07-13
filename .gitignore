@@ -83,8 +83,10 @@ node_modules/
 /login-bg.png
 /login-bg2.png
 
+# Miscellaneous
 .superpowers
 design_reference_1.md
 design_reference_2.md
 design_reference_3.md
 ARCHITECTURE.md
+REVIEWER_CONTEXT.md

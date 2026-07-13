@@ -14,7 +14,7 @@ from backend.routes.admin import router as admin_router
 from backend.routes.me import router as me_router
 from backend.core.preferences import initialize_preferences_table
 from backend.core.chat_memory import initialize_chat_memory
-from backend.core.config import FRONTEND_ORIGIN, LEAVE_AGENT_ENABLED, require_jwt_secret
+from backend.core.config import FRONTEND_ORIGIN, JIRA_AGENT_ENABLED, LEAVE_AGENT_ENABLED, require_jwt_secret
 from backend.core.doc_status import initialize_doc_status_table
 from backend.core.errors import register_error_handlers
 from backend.core.ratelimit import limiter, rate_limit_handler
@@ -98,6 +98,18 @@ async def startup_event():
         set_graph(graph)
         logger.info("Leave write agent ready (LEAVE_AGENT_ENABLED=true).")
 
+    if JIRA_AGENT_ENABLED:
+        from backend.core.jira.mock import MockJira
+        from backend.core.jira_case import initialize_jira_case_tables
+        from backend.services.jira_graph import build_jira_graph
+        from backend.services.leave_checkpointer import get_checkpointer
+        from backend.routes.jira_agent import set_graph as set_jira_graph
+
+        initialize_jira_case_tables()
+        jira_graph = build_jira_graph(jira=MockJira(), checkpointer=get_checkpointer())
+        set_jira_graph(jira_graph)
+        logger.info("Jira write agent ready (JIRA_AGENT_ENABLED=true).")
+
     chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
@@ -113,7 +125,9 @@ async def shutdown_event():
     """Close the DB connection pool so its worker threads stop cleanly."""
     from backend.core.db import close_pool
     close_pool()
-    if LEAVE_AGENT_ENABLED:
+    # One process-wide checkpointer, shared by both write agents — close it if
+    # EITHER opened it.
+    if LEAVE_AGENT_ENABLED or JIRA_AGENT_ENABLED:
         from backend.services.leave_checkpointer import close_checkpointer
         close_checkpointer()
 
@@ -127,6 +141,10 @@ if LEAVE_AGENT_ENABLED:
     from backend.routes.leave_agent import router as leave_agent_router
     app.include_router(slack_auth_router)
     app.include_router(leave_agent_router)
+
+if JIRA_AGENT_ENABLED:
+    from backend.routes.jira_agent import router as jira_agent_router
+    app.include_router(jira_agent_router)
 
 @app.get("/health")
 def health_check():
