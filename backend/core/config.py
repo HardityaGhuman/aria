@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+import json
 import os
 
 # Load .env from backend directory explicitly
@@ -100,6 +101,31 @@ LEAVE_MIN_NOTICE_DAYS = int(os.getenv("LEAVE_MIN_NOTICE_DAYS", "3"))
 LEAVE_BLACKOUT_DATES = [d.strip() for d in os.getenv("LEAVE_BLACKOUT_DATES", "").split(",") if d.strip()]
 # Postgres store for LangGraph checkpoints. Defaults to the app DB.
 LANGGRAPH_CHECKPOINT_DSN = os.getenv("LANGGRAPH_CHECKPOINT_DSN", DATABASE_URL)
+
+# --- Write Slice 2: Jira work-request agent (HITL-gated write) ---
+# Master switch. false ⇒ jira routers unmounted, no write path exists.
+JIRA_AGENT_ENABLED = os.getenv("JIRA_AGENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+JIRA_ALLOWED_PROJECTS = [p.strip() for p in os.getenv(
+    "JIRA_ALLOWED_PROJECTS", "MARKETING,DESIGN,FINANCE,IT,OFFICE").split(",") if p.strip()]
+JIRA_ALLOWED_ISSUE_TYPES = [t.strip() for t in os.getenv(
+    "JIRA_ALLOWED_ISSUE_TYPES", "Work Request,Access Request,Change Request,Task").split(",") if t.strip()]
+JIRA_MAX_SUMMARY_LEN = int(os.getenv("JIRA_MAX_SUMMARY_LEN", "200"))
+JIRA_MAX_DESCRIPTION_LEN = int(os.getenv("JIRA_MAX_DESCRIPTION_LEN", "4000"))
+
+
+def _parse_approver_map(raw: str) -> dict:
+    """JSON env → {project: approver_email}. Malformed/empty → {} (fail closed:
+    an unmapped project routes to `unroutable`, never a silent default)."""
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+JIRA_PROJECT_APPROVERS = _parse_approver_map(os.getenv("JIRA_PROJECT_APPROVERS", ""))
 
 # --- Auth / JWT ---
 # JWT_SECRET is validated at startup (see require_jwt_secret), NOT at import time,
