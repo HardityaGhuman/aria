@@ -21,14 +21,16 @@ from backend.core import jira_case as jira_case_store
 from backend.core.jira import JiraClient
 from backend.core.jira.mock import MockJira
 from backend.core.tools.create_jira_issue import CreateJiraIssueTool
-from backend.core.tools.principal import Principal
+from backend.core.tools.principal import load_principal
 from backend.services.jira_extract import extract_jira_fields
 from backend.services.jira_validator import validate_jira
+
+_IDENTITY_GONE = "requester no longer exists"
 
 
 class JiraState(TypedDict, total=False):
     case_id: str
-    principal: Principal          # server-built, never from LLM
+    user_id: int                  # identity ANCHOR only — the Principal is reloaded per node
     raw_text: str                 # the only LLM input
     approver_email: str | None
     project: str
@@ -54,10 +56,11 @@ def thread_config(case_id: str) -> dict:
 
 
 def build_jira_graph(*, jira: JiraClient | None = None, checkpointer, extract_fn=None,
-                     submit_tool=None, case_store=jira_case_store) -> JiraGraph:
+                     submit_tool=None, case_store=jira_case_store, principal_loader=None) -> JiraGraph:
     jira = jira or MockJira()
     extract_fn = extract_fn or extract_jira_fields
     submit_tool = submit_tool or CreateJiraIssueTool(jira)
+    principal_loader = principal_loader or load_principal
 
     def extract(state: JiraState) -> dict:
         fields = extract_fn(state["raw_text"])
@@ -89,11 +92,17 @@ def build_jira_graph(*, jira: JiraClient | None = None, checkpointer, extract_fn
 
     def create(state: JiraState) -> dict:
         case_store.transition(state["case_id"], "approved", state.get("decision_actor") or "approver", "approved")
+        # Identity is reloaded HERE, after the sleep: never write under the role/region the
+        # requester had when the Case was filed. Gone user ⇒ fail closed, no issue created.
+        principal = principal_loader(state["user_id"])
+        if principal is None:
+            case_store.transition(state["case_id"], "write_failed", "system", _IDENTITY_GONE)
+            return {"status": "write_failed"}
         result = submit_tool.invoke(
             {"case_id": state["case_id"], "project": state["project"],
              "issue_type": state["issue_type"], "summary": state["summary"],
              "description": state["description"]},
-            state["principal"],
+            principal,
         )
         if result.status != "ok":
             case_store.transition(state["case_id"], "write_failed", "system", result.error or "write failed")
@@ -136,7 +145,7 @@ def start_case(graph: JiraGraph, *, case_id, principal, raw_text, approver_email
     """Run the graph to its interrupt (pending_approval) or a terminal denial."""
     store = case_store or graph.case_store
     graph.compiled.invoke(
-        {"case_id": case_id, "principal": principal, "raw_text": raw_text,
+        {"case_id": case_id, "user_id": principal.user_id, "raw_text": raw_text,
          "approver_email": approver_email},
         thread_config(case_id),
     )
