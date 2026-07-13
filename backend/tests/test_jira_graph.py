@@ -62,12 +62,12 @@ def test_approve_creates_issue():
     assert row["issue_key"] == "MARKETING-1"
 
 
-def test_deny_ends_denied_approver():
+def test_deny_ends_denied_manager():
     store = _seed_store()
     g = _graph(store)
     jg.start_case(g, case_id="cid", principal=_p(), raw_text="x", approver_email="cmo@gsvh.test")
     row = jg.resume_case(g, case_id="cid", decision="deny", actor_id="cmo@gsvh.test")
-    assert row["status"] == "denied_approver"
+    assert row["status"] == "denied_manager"
 
 
 def test_validation_fail_never_reaches_approval():
@@ -75,7 +75,7 @@ def test_validation_fail_never_reaches_approval():
     bad_extract = lambda raw: {"project": "SECRET", "issue_type": "Task", "summary": "x", "description": ""}
     g = _graph(store, extract_fn=bad_extract)
     row = jg.start_case(g, case_id="cid", principal=_p(), raw_text="x", approver_email="cmo@gsvh.test")
-    assert row["status"] == "denied_validation"
+    assert row["status"] == "denied_policy"
 
 
 def test_resume_after_rebuild_survives():
