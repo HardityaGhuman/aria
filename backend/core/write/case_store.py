@@ -166,6 +166,55 @@ def transition(spec: CaseSpec, case_id: str, new_status: str, actor_id: str, det
             return row
 
 
+def _summary_select(spec: CaseSpec) -> str:
+    """The projection every list surface returns. Business columns come from the spec, so a
+    caller can never name a column, and the agent tag is what lets the UI group rows."""
+    cols = ", ".join(spec.summary_columns)
+    return (
+        f"SELECT case_id, '{spec.agent}' AS agent, employee_email, approver_email, status, "
+        f"{spec.result_column} AS result_id, attempt, failure_reason, "
+        f"{cols + ', ' if cols else ''}created_at, updated_at "
+        f"FROM {spec.table}"
+    )
+
+
+def list_dead_letter(specs) -> list[dict]:
+    """The DLQ, across every agent. A query (WHERE status = 'dead_letter'), never a second
+    table — a Case that failed transiently is the SAME Case in a different state, and copying
+    it into a queue table is how the two copies start disagreeing."""
+    rows: list[dict] = []
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            for spec in specs:
+                cursor.execute(f"{_summary_select(spec)} WHERE status = 'dead_letter'")
+                rows.extend(dict(r) for r in cursor.fetchall())
+    return sorted(rows, key=lambda r: r["updated_at"], reverse=True)
+
+
+def list_for_user(specs, email: str, role: str) -> list[dict]:
+    """`requester` -> the Cases I filed. `approver` -> the Cases waiting on MY decision
+    (pending_approval only: an approver has no business seeing every Case they ever touched
+    in a queue named "awaiting you"). The email predicate IS the authorization boundary — a
+    caller who is neither party gets an empty list, not a 403, because there is nothing of
+    theirs to deny."""
+    if role not in ("requester", "approver"):
+        raise WriteCaseError(f"unknown role {role!r}")
+    rows: list[dict] = []
+    with _connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            for spec in specs:
+                if role == "requester":
+                    cursor.execute(f"{_summary_select(spec)} WHERE employee_email = %s", (email,))
+                else:
+                    cursor.execute(
+                        f"{_summary_select(spec)} WHERE approver_email = %s "
+                        f"AND status = 'pending_approval'",
+                        (email,),
+                    )
+                rows.extend(dict(r) for r in cursor.fetchall())
+    return sorted(rows, key=lambda r: r["updated_at"], reverse=True)
+
+
 def list_audit(spec: CaseSpec, case_id: str) -> list[dict]:
     with _connect() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:

@@ -155,3 +155,55 @@ def test_initialize_is_re_runnable():
         leave_case.initialize_leave_case_tables()
         jira_case.initialize_jira_case_tables()
         onboarding_case.initialize_onboarding_case_tables()
+
+
+@pg
+def test_dead_letter_queue_spans_every_agent():
+    """The DLQ is a query, not a table — and it must be ONE query, or an admin has to
+    remember to check three pages to learn that automation is stuck."""
+    from backend.core import jira_case, leave_case
+    leave_case.initialize_leave_case_tables()
+    jira_case.initialize_jira_case_tables()
+
+    lc = case_store.create_case(leave_case.LEAVE_SPEC, "e@t.test", "m@t.test", _idem(),
+                                start_date="2026-08-01", end_date="2026-08-02", days=1,
+                                reason="trip")
+    jc = case_store.create_case(jira_case.JIRA_SPEC, "e@t.test", "m@t.test", _idem(),
+                                project="MARKETING", issue_type="Task", summary="s",
+                                description="d")
+    for spec, row in ((leave_case.LEAVE_SPEC, lc), (jira_case.JIRA_SPEC, jc)):
+        cid = str(row["case_id"])
+        case_store.transition(spec, cid, "pending_approval", "system", "gate")
+        case_store.transition(spec, cid, "approved", "m@t.test", "approved")
+        case_store.transition(spec, cid, "dead_letter", "system", "connector down",
+                              attempt=3, failure_reason="transient")
+
+    dlq = case_store.list_dead_letter([leave_case.LEAVE_SPEC, jira_case.JIRA_SPEC])
+    agents = {r["agent"] for r in dlq}
+    assert {"leave", "jira"} <= agents
+    assert all(r["status"] == "dead_letter" for r in dlq)
+
+
+@pg
+def test_list_for_user_separates_my_requests_from_my_approvals():
+    """The manager's inbox. Without this query the HITL gate is reachable only by someone who
+    already knows the Case's UUID — which is to say, by nobody."""
+    from backend.core import leave_case
+    leave_case.initialize_leave_case_tables()
+    specs = [leave_case.LEAVE_SPEC]
+    row = case_store.create_case(leave_case.LEAVE_SPEC, "alice@t.test", "boss@t.test", _idem(),
+                                 start_date="2026-08-01", end_date="2026-08-02", days=1,
+                                 reason="trip")
+    cid = str(row["case_id"])
+    case_store.transition(leave_case.LEAVE_SPEC, cid, "pending_approval", "system", "gate")
+
+    mine = case_store.list_for_user(specs, "alice@t.test", "requester")
+    assert cid in {str(r["case_id"]) for r in mine}
+
+    inbox = case_store.list_for_user(specs, "boss@t.test", "approver")
+    assert cid in {str(r["case_id"]) for r in inbox}
+    assert all(r["status"] == "pending_approval" for r in inbox)   # only what still needs me
+
+    # A stranger sees neither — the query IS the authorization boundary.
+    assert case_store.list_for_user(specs, "eve@t.test", "requester") == []
+    assert case_store.list_for_user(specs, "eve@t.test", "approver") == []
