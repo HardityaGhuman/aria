@@ -47,8 +47,13 @@ class SubmitLeaveTool:
             )
         except KeyError as exc:
             raise PermanentWriteError(f"no HRIS record for caller: {exc}") from exc
+        # The HRIS's echo of what it booked is forwarded verbatim: the graph verifies the
+        # booked dates against the dates the manager approved, and it can only do that if
+        # the connector's answer reaches it.
         return ToolResult(
             status="ok",
-            data={"confirmation_id": booked["confirmation_id"], "remaining": booked["remaining"]},
+            data={"confirmation_id": booked["confirmation_id"], "remaining": booked["remaining"],
+                  "start_date": booked.get("start_date"), "end_date": booked.get("end_date"),
+                  "days": booked.get("days")},
             summary=f"Leave booked (confirmation {booked['confirmation_id']}).",
         )
