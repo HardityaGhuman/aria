@@ -12,7 +12,12 @@ import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.config import JIRA_AGENT_ENABLED, JIRA_ALLOWED_PROJECTS, JIRA_PROJECT_APPROVERS
-from backend.core.jira_case import create_case, get_case, transition
+from backend.core.jira_case import (
+    create_case,
+    get_case,
+    get_case_by_idempotency_key,
+    transition,
+)
 from backend.core.tools.principal import principal_from_user
 from backend.routes.deps import traced_user
 from backend.services.jira_extract import extract_jira_fields
@@ -35,14 +40,15 @@ def _guard() -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
-def _idempotency_key(body: dict, email: str, fields: dict) -> str:
-    """Client-supplied intent key (primary), else content-hash fallback over ALL
-    content fields (defense-in-depth — the frontend SHOULD always send one)."""
+def _idempotency_key(body: dict, email: str, text: str) -> str:
+    """Client-supplied intent key (primary), else a hash of the RAW TEXT — never of the
+    model's output. Extraction is probabilistic: a re-clicked submit that summarizes even
+    slightly differently would hash to a different key and fork a SECOND Case for one
+    intent. The raw text is the only deterministic input the user actually gave us."""
     supplied = (body.get("idempotency_key") or "").strip()
     if supplied:
         return supplied
-    raw = "|".join([email, fields["project"], fields["issue_type"],
-                    fields["summary"], fields["description"]])
+    raw = "|".join([email or "", text])
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -53,10 +59,18 @@ async def start_jira(request: Request, user: dict = Depends(traced_user)):
     body = await request.json()
     text = body["text"]
 
+    # The duplicate check runs BEFORE the extract: a Case already moving must be READ, not
+    # re-driven — re-invoking the graph on a thread parked at the approval gate re-runs
+    # nodes and appends checkpoints. It also saves the LLM call.
+    idem = _idempotency_key(body, principal.email, text)
+    dup = get_case_by_idempotency_key(idem)
+    if dup is not None and dup["status"] != "draft":
+        return {"case_id": str(dup["case_id"]), "status": dup["status"],
+                "approver_email": dup.get("approver_email")}
+
     fields = extract_jira_fields(text)
     project = fields["project"]
     approver_email = JIRA_PROJECT_APPROVERS.get(project)
-    idem = _idempotency_key(body, principal.email, fields)
     case = create_case(principal.email, approver_email, project, fields["issue_type"],
                        fields["summary"], fields["description"], idem)
     case_id = str(case["case_id"])

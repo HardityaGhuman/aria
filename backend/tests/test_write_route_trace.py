@@ -104,16 +104,24 @@ def test_onboarding_decision_runs_inside_a_trace(monkeypatch, seen):
 
 
 def test_admin_replay_runs_inside_a_trace(monkeypatch, seen):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "dead_letter"})
+    """The replay lives on the agent-agnostic /admin/write surface now, but the property is
+    the same: the work the replay drives must emit under a trace id."""
+    import backend.routes.write_cases as write_cases
 
-    def _replay(*_a, **_k):
+    def _replay(_graph, *, case_id, actor_id):
         seen["trace"] = current_trace()
-        return {"case_id": "cid", "status": "provisioned"}
+        return {"case_id": case_id, "status": "provisioned", "grant_id": "g1"}
 
-    monkeypatch.setattr(onboarding_agent, "replay_case", _replay)
-    r = _app(onboarding_agent, user_role="hr").post("/admin/onboarding/cases/cid/replay")
+    class _Agent:
+        name = "onboarding"
+        spec = type("S", (), {"result_column": "grant_id"})()
+        graph = None
+        replay = staticmethod(_replay)
+
+    monkeypatch.setattr(write_cases, "_agent_or_404", lambda name: _Agent())
+    monkeypatch.setattr(write_cases.case_store, "get_case",
+                        lambda spec, cid: {"case_id": cid, "status": "dead_letter"})
+    r = _app(write_cases, user_role="hr").post("/admin/write/cases/onboarding/cid/replay")
     assert r.status_code == 200
     assert seen["trace"] is not None
 

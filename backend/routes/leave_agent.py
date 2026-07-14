@@ -6,12 +6,19 @@ the Slack signature, authenticate n8n by shared bearer, resolve a SERVER Princip
 the verified slack_user_id (never trusting typed identity), drive the write Case, and —
 on the decision endpoint — re-check that the clicking user is the Case's approver. All
 routes are absent (404) unless LEAVE_AGENT_ENABLED."""
+import hashlib
+
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.config import LEAVE_AGENT_ENABLED
 from backend.core.hris.mock import MockHRIS
-from backend.core.leave_case import create_case, get_case, transition
+from backend.core.leave_case import (
+    create_case,
+    get_case,
+    get_case_by_idempotency_key,
+    transition,
+)
 from backend.core.slack_identity import principal_for_slack, slack_user_for_email
 from backend.core.slack_verify import require_n8n_secret, verify_slack_signature
 from backend.routes.deps import open_trace
@@ -55,6 +62,13 @@ async def _verify_slack(request: Request) -> bytes:
     return body
 
 
+def _idempotency_key(email: str, text: str) -> str:
+    """The Slack edge sends no client key, so the key is a hash of the one deterministic
+    input the user gave: the raw message text."""
+    raw = "|".join([email or "", text])
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 @router.post("")
 async def start_leave(request: Request):
     _guard(request)
@@ -64,10 +78,19 @@ async def start_leave(request: Request):
     if principal is None:
         raise HTTPException(status_code=401, detail="Slack account not linked. Please link it first.")
 
+    # The key hashes the RAW TEXT, never the model's output. It used to be
+    # "{email}:{start_date}:{end_date}" — and those dates come OUT OF THE LLM, so a
+    # re-sent Slack message that extracted even one day differently hashed to a different
+    # key and forked a second Case for one intent. The duplicate check also runs BEFORE the
+    # extract: a Case already moving is READ, not re-driven onto its parked thread.
+    idem = _idempotency_key(principal.email, payload["text"])
+    dup = get_case_by_idempotency_key(idem)
+    if dup is not None and dup["status"] != "draft":
+        return {"case_id": str(dup["case_id"]), "status": dup["status"]}
+
     fields = extract_leave_fields(payload["text"])
     days = compute_days(fields["start_date"], fields["end_date"])
     approver_email = _HRIS.manager_email(principal)
-    idem = f"{principal.email}:{fields['start_date']}:{fields['end_date']}"
     case = create_case(principal.email, approver_email, fields["start_date"], fields["end_date"],
                        days, fields["reason"], idem)
 
