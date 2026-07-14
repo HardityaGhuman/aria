@@ -24,14 +24,12 @@ from backend.core.onboarding_case import (
     get_case,
     get_case_by_idempotency_key,
     list_audit,
-    list_dead_letter,
     transition,
 )
 from backend.core.tools.principal import principal_from_user
-from backend.core.write.breaker import get_breaker, reset_breaker
-from backend.routes.deps import traced_role, traced_user
+from backend.routes.deps import traced_user
 from backend.services.onboarding_extract import OnboardingExtractError, extract_onboarding_fields
-from backend.services.onboarding_graph import CONNECTOR, replay_case, resume_case, start_case
+from backend.services.onboarding_graph import resume_case, start_case
 from backend.services.onboarding_validator import validate_onboarding
 
 router = APIRouter(prefix="/agents/onboarding", tags=["Onboarding Agent"])
@@ -159,41 +157,3 @@ def read_onboarding_case(case_id: str, user: dict = Depends(traced_user)):
     return {"case_id": case_id, "status": case["status"], "role": case["role"],
             "tools": case["tools"], "grant_id": case.get("grant_id"),
             "audit": list_audit(case_id)}
-
-
-# --- admin surface: the DLQ and the breaker ----------------------------------------
-# Both exist because automation must be able to HALT and a human must be able to RESUME
-# it. Neither is self-healing by design: a breaker that resets itself hides the outage,
-# and a Case that replays itself hides the failure that dead-lettered it.
-admin_router = APIRouter(prefix="/admin/onboarding", tags=["Onboarding Agent (admin)"])
-
-
-@admin_router.get("/dead-letter")
-def list_dead_letter_cases(_: dict = Depends(traced_role("hr"))):
-    """The DLQ. A query (WHERE status = 'dead_letter'), not a second table."""
-    _guard()
-    return {"cases": list_dead_letter()}
-
-
-@admin_router.post("/cases/{case_id}/replay")
-def replay_onboarding_case(case_id: str, user: dict = Depends(traced_role("hr"))):
-    """Resume a dead-lettered Case from its checkpoint. No re-extraction, no second
-    approval, no forked audit log — and idempotency by case_id means a replay that
-    races a late success cannot double-grant."""
-    _guard()
-    case = get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="No such case")
-    if case["status"] != "dead_letter":
-        raise HTTPException(status_code=409, detail=f"Case is {case['status']}, not dead_letter")
-    row = replay_case(_GRAPH, case_id=case_id, actor_id=user.get("email") or "admin")
-    return {"case_id": case_id, "status": row["status"], "grant_id": row.get("grant_id")}
-
-
-@admin_router.post("/breaker/reset")
-def reset_access_breaker(_: dict = Depends(traced_role("hr"))):
-    """Explicit clearance for the access-provisioner breaker. Never time-based: a
-    self-healing breaker silently re-enters the outage it exists to surface."""
-    _guard()
-    reset_breaker(CONNECTOR)
-    return {"connector": CONNECTOR, "open": get_breaker(CONNECTOR).is_open()}

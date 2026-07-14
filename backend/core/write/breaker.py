@@ -51,3 +51,9 @@ def get_breaker(name: str) -> CircuitBreaker:
 def reset_breaker(name: str) -> None:
     """Explicit clearance (admin route, or a test isolating itself)."""
     _BREAKERS.pop(name, None)
+
+
+def all_breakers() -> dict[str, CircuitBreaker]:
+    """Read-only view for the admin board. A copy, so a caller iterating the board cannot
+    mutate the live registry — the only ways in are get_breaker and reset_breaker."""
+    return dict(_BREAKERS)

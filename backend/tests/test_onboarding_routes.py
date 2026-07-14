@@ -200,62 +200,6 @@ def test_owner_can_read_their_case(monkeypatch):
     assert r.json()["status"] == "provisioned"
     assert r.json()["audit"] == [{"event": "drafted"}]
 
-
-# --- admin routes -----------------------------------------------------------------
-
-def _admin_client(role="hr", email="hr@gsvh.test"):
-    app = FastAPI()
-    app.include_router(onboarding_agent.admin_router)
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": 9, "email": email, "role": role, "region": "us"}
-    return TestClient(app)
-
-
-def test_replay_is_admin_only(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    r = _admin_client(role="employee", email="newhire@gsvh.test").post(
-        "/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 403
-
-
-def test_replay_rejects_a_case_that_is_not_dead_lettered(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "provisioned"})
-    r = _admin_client().post("/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 409
-
-
-def test_replay_resumes_a_dead_lettered_case(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "dead_letter"})
-    monkeypatch.setattr(onboarding_agent, "replay_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "provisioned", "grant_id": "g1"})
-    r = _admin_client().post("/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 200
-    assert r.json()["status"] == "provisioned"
-
-
-def test_dead_letter_queue_is_listable(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "list_dead_letter",
-                        lambda: [{"case_id": "cid", "status": "dead_letter", "attempt": 3}])
-    r = _admin_client().get("/admin/onboarding/dead-letter")
-    assert r.json()["cases"][0]["case_id"] == "cid"
-
-
-def test_breaker_reset_is_explicit_and_admin_only(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    from backend.core.write.breaker import get_breaker
-    breaker = get_breaker("access-provisioner")
-    for _ in range(breaker.threshold):
-        breaker.record_failure()
-    assert breaker.is_open() is True
-
-    assert _admin_client(role="employee").post("/admin/onboarding/breaker/reset").status_code == 403
-
-    r = _admin_client().post("/admin/onboarding/breaker/reset")
-    assert r.status_code == 200
-    assert r.json()["open"] is False
-    assert get_breaker("access-provisioner").is_open() is False
+# The admin routes (DLQ, replay, breaker reset) moved to the agent-agnostic
+# /admin/write surface once leave and jira could dead-letter too — their coverage now
+# lives in test_write_cases_routes.py.
