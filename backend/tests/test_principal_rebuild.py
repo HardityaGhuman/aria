@@ -44,7 +44,9 @@ class _FakeCaseStore:
     def __init__(self, row: dict):
         self.rows = {"cid": row}
 
-    def transition(self, case_id, new_status, actor_id, detail, *, issue_key=None, confirmation_id=None):
+    def transition(self, case_id, new_status, actor_id, detail, *, issue_key=None,
+                   confirmation_id=None, **kw):
+        # **kw: the shared write node also passes control columns (attempt, failure_reason).
         self.rows[case_id]["status"] = new_status
         if issue_key:
             self.rows[case_id]["issue_key"] = issue_key
@@ -135,7 +137,9 @@ def _leave_graph(store, directory, tool):
 
 def test_leave_write_uses_the_identity_current_at_approval_not_at_request():
     store, directory = _leave_store(), _Directory(_p(region="us"))
-    tool = _RecordingTool({"confirmation_id": "LV-1"})
+    # The echo matters: the write node verifies the booked dates against the approved ones.
+    tool = _RecordingTool({"confirmation_id": "LV-1", "start_date": "2026-08-03",
+                           "end_date": "2026-08-05"})
     graph = _leave_graph(store, directory, tool)
     lg.start_case(graph, case_id="cid", principal=_p(region="us"), raw_text="x",
                   approver_email="manager@gsvh.test")
@@ -148,7 +152,9 @@ def test_leave_write_uses_the_identity_current_at_approval_not_at_request():
 
 def test_leave_write_fails_closed_when_the_requester_no_longer_exists():
     store, directory = _leave_store(), _Directory(_p())
-    tool = _RecordingTool({"confirmation_id": "LV-1"})
+    # The echo matters: the write node verifies the booked dates against the approved ones.
+    tool = _RecordingTool({"confirmation_id": "LV-1", "start_date": "2026-08-03",
+                           "end_date": "2026-08-05"})
     graph = _leave_graph(store, directory, tool)
     lg.start_case(graph, case_id="cid", principal=_p(), raw_text="x",
                   approver_email="manager@gsvh.test")
@@ -162,7 +168,9 @@ def test_leave_write_fails_closed_when_the_requester_no_longer_exists():
 
 def test_leave_validate_denies_when_the_requester_is_already_gone():
     store, directory = _leave_store(), _Directory(None)
-    tool = _RecordingTool({"confirmation_id": "LV-1"})
+    # The echo matters: the write node verifies the booked dates against the approved ones.
+    tool = _RecordingTool({"confirmation_id": "LV-1", "start_date": "2026-08-03",
+                           "end_date": "2026-08-05"})
     graph = _leave_graph(store, directory, tool)
 
     row = lg.start_case(graph, case_id="cid", principal=_p(), raw_text="x",
