@@ -116,3 +116,71 @@ def test_breaker_reset_is_explicit_and_admin_only():
     assert r.status_code == 200
     assert r.json()["open"] is False
     assert get_breaker("hris").is_open() is False
+
+
+# --- the HITL gate, agent-agnostic ----------------------------------------------------
+# Leave's own decision endpoint demands a Slack signature, so before this a manager could
+# not approve a leave Case from anywhere but Slack. The chat is the product surface now,
+# so the gate needs one JWT-native door that every agent shares.
+
+def _decider_agent(recorder):
+    class _Agent(_FakeAgent):
+        resume = staticmethod(
+            lambda graph, *, case_id, decision, actor_id:
+            recorder.update(case_id=case_id, decision=decision, actor_id=actor_id) or
+            {"case_id": case_id, "status": "booked" if decision == "approve" else "denied_manager",
+             "confirmation_id": "BK-1"})
+    return _Agent()
+
+
+def test_only_the_named_approver_can_decide(monkeypatch):
+    """The caller's authority comes from the CASE ROW, checked server-side. A case_id in a
+    URL — or a client that flips its own can_decide flag — grants nothing."""
+    monkeypatch.setattr(wc, "_agent_or_404", lambda name: _decider_agent({}))
+    monkeypatch.setattr(wc.case_store, "get_case", lambda spec, cid: {
+        "case_id": cid, "status": "pending_approval", "employee_email": "alice@gsvh.test",
+        "approver_email": "boss@gsvh.test"})
+
+    body = {"decision": "approve"}
+    assert _client(email="eve@gsvh.test").post(
+        "/agents/cases/leave/c1/decision", json=body).status_code == 403
+    # not even the requester may approve their own request
+    assert _client(email="alice@gsvh.test").post(
+        "/agents/cases/leave/c1/decision", json=body).status_code == 403
+    assert _client(email="boss@gsvh.test").post(
+        "/agents/cases/leave/c1/decision", json=body).status_code == 200
+
+
+def test_a_decision_resumes_the_graph_and_returns_the_new_status(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(wc, "_agent_or_404", lambda name: _decider_agent(seen))
+    monkeypatch.setattr(wc.case_store, "get_case", lambda spec, cid: {
+        "case_id": cid, "status": "pending_approval", "employee_email": "alice@gsvh.test",
+        "approver_email": "boss@gsvh.test"})
+    r = _client(email="boss@gsvh.test").post("/agents/cases/leave/c1/decision",
+                                             json={"decision": "approve"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "booked"
+    assert seen == {"case_id": "c1", "decision": "approve", "actor_id": "boss@gsvh.test"}
+
+
+def test_a_case_that_is_not_awaiting_a_decision_is_a_conflict(monkeypatch):
+    """Deciding twice must not re-drive a graph that already ran: the second click is a
+    409, not a second write."""
+    monkeypatch.setattr(wc, "_agent_or_404", lambda name: _decider_agent({}))
+    monkeypatch.setattr(wc.case_store, "get_case", lambda spec, cid: {
+        "case_id": cid, "status": "booked", "employee_email": "alice@gsvh.test",
+        "approver_email": "boss@gsvh.test"})
+    r = _client(email="boss@gsvh.test").post("/agents/cases/leave/c1/decision",
+                                             json={"decision": "approve"})
+    assert r.status_code == 409
+
+
+def test_an_unknown_decision_word_is_rejected(monkeypatch):
+    monkeypatch.setattr(wc, "_agent_or_404", lambda name: _decider_agent({}))
+    monkeypatch.setattr(wc.case_store, "get_case", lambda spec, cid: {
+        "case_id": cid, "status": "pending_approval", "employee_email": "alice@gsvh.test",
+        "approver_email": "boss@gsvh.test"})
+    r = _client(email="boss@gsvh.test").post("/agents/cases/leave/c1/decision",
+                                             json={"decision": "maybe"})
+    assert r.status_code == 422

@@ -26,6 +26,27 @@ class Source(BaseModel):
     source_type: str | None = Field(None, description="Access tier the chunk came from (all/manager/hr_only).")
 
 
+class CaseCard(BaseModel):
+    """A write Case as the chat renders it. Deliberately thin: ids, the lifecycle status,
+    the human-readable one-liner, and whether THIS caller is the one who must decide. The
+    business fields ride in ``detail`` untyped because they differ per agent (dates vs
+    project vs tool list) — the card shows them, it does not reason about them.
+
+    ``can_decide`` is a UI courtesy ONLY. The decision route re-checks server-side that the
+    caller is the Case's approver; a client that flips this flag gains nothing.
+    """
+
+    case_id: str = Field(..., description="The Case's id (the unit of work, not the message).")
+    agent: str = Field(..., description="leave | jira | onboarding.")
+    status: str = Field(..., description="Lifecycle status, e.g. pending_approval / booked / dead_letter.")
+    summary: str = Field("", description="One-line human summary of what was requested.")
+    requester_email: str | None = Field(None, description="Who filed it.")
+    approver_email: str | None = Field(None, description="Who must decide (null when there is nothing to decide).")
+    detail: dict = Field(default_factory=dict, description="Agent-specific business fields.")
+    reason: str | None = Field(None, description="Why it was denied or could not be routed, when it was.")
+    can_decide: bool = Field(False, description="True when the CALLER is this Case's approver. UI hint only.")
+
+
 class ChatResponse(BaseModel):
     """Standardized envelope for ``POST /chat``.
 
@@ -45,6 +66,13 @@ class ChatResponse(BaseModel):
     session_id: str = Field(..., description="The conversation id this reply belongs to.")
     status: ChatStatus = Field(
         ..., description="ok | partial | no_results | blocked | refused | tool_unavailable.")
+    cases: list[CaseCard] = Field(
+        default_factory=list,
+        description=(
+            "Write Cases this turn produced or is asking a decision on. Empty on every "
+            "read turn. Rendered as cards; the approve/deny buttons act on them."
+        ),
+    )
 
 
 # --- Auth ---

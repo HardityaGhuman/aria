@@ -72,11 +72,12 @@ def _register_write_agents(*, leave_graph=None, jira_graph=None, onboarding_grap
     from backend.services.write_agents import WriteAgent, register
 
     if LEAVE_AGENT_ENABLED and leave_graph is not None:
-        register(WriteAgent("leave", LEAVE_SPEC, leave_graph, lg.replay_case))
+        register(WriteAgent("leave", LEAVE_SPEC, leave_graph, lg.replay_case, lg.resume_case))
     if JIRA_AGENT_ENABLED and jira_graph is not None:
-        register(WriteAgent("jira", JIRA_SPEC, jira_graph, jg.replay_case))
+        register(WriteAgent("jira", JIRA_SPEC, jira_graph, jg.replay_case, jg.resume_case))
     if ONBOARDING_AGENT_ENABLED and onboarding_graph is not None:
-        register(WriteAgent("onboarding", ONBOARDING_SPEC, onboarding_graph, og.replay_case))
+        register(WriteAgent("onboarding", ONBOARDING_SPEC, onboarding_graph, og.replay_case,
+                            og.resume_case))
 
 
 @app.on_event("startup")

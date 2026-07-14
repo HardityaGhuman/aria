@@ -49,7 +49,32 @@ _TABLE: dict[str, tuple] = {
     "chitchat": (None,            (),               RetrievalRequirement.NONE,     False, 0,  0,  True),
     # out_of_scope answers with a fixed refusal — no answer-model call at all.
     "out_of_scope": (None,        (),               RetrievalRequirement.NONE,     False, 0,  0,  False),
+    # The write lanes. A write is not a question: no specialist, no READ tool, no
+    # retrieval, and no answer-model call — the reply is rendered from the Case the agent
+    # filed. Zero budgets here mean a prompt-injected write label can never widen a read.
+    "write_leave":      (None,    (),               RetrievalRequirement.NONE,     False, 0,  0,  False),
+    "write_jira":       (None,    (),               RetrievalRequirement.NONE,     False, 0,  0,  False),
+    "write_onboarding": (None,    (),               RetrievalRequirement.NONE,     False, 0,  0,  False),
+    "approvals":        (None,    (),               RetrievalRequirement.NONE,     False, 0,  0,  False),
 }
+
+# The fixed intent -> write-agent map. The model NAMES an intent; this table picks the
+# agent. Keeping it here (and not in the model's answer) is what makes a prompt-injected
+# "write_jira" harmless: it can still only ever reach the jira agent, which still runs its
+# own deterministic validator and still parks at a human approval gate.
+_WRITE_AGENTS: dict[str, str] = {
+    "write_leave": "leave",
+    "write_jira": "jira",
+    "write_onboarding": "onboarding",
+}
+
+WRITE_INTENTS = frozenset(_WRITE_AGENTS) | {"approvals"}
+
+
+def agent_for_intent(intent: str) -> str | None:
+    """The write agent a lane routes to, or None if the lane is not a filing lane."""
+    return _WRITE_AGENTS.get(intent)
+
 
 _DEFAULT_INTENT = "policy"
 

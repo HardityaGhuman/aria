@@ -19,7 +19,8 @@ class WriteAgent:
     name: str
     spec: CaseSpec
     graph: object
-    replay: Callable          # replay(graph, *, case_id, actor_id) -> dict
+    replay: Callable                  # replay(graph, *, case_id, actor_id) -> dict
+    resume: Callable | None = None    # resume(graph, *, case_id, decision, actor_id) -> dict
 
 
 AGENTS: dict[str, WriteAgent] = {}
