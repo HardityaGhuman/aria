@@ -35,6 +35,87 @@
         "title": "Body_upload_document_admin_documents_upload_post",
         "type": "object"
       },
+      "CaseCard": {
+        "description": "A write Case as the chat renders it. Deliberately thin: ids, the lifecycle status,\nthe human-readable one-liner, and whether THIS caller is the one who must decide. The\nbusiness fields ride in ``detail`` untyped because they differ per agent (dates vs\nproject vs tool list) \u2014 the card shows them, it does not reason about them.\n\n``can_decide`` is a UI courtesy ONLY. The decision route re-checks server-side that the\ncaller is the Case's approver; a client that flips this flag gains nothing.",
+        "properties": {
+          "agent": {
+            "description": "leave | jira | onboarding.",
+            "title": "Agent",
+            "type": "string"
+          },
+          "approver_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who must decide (null when there is nothing to decide).",
+            "title": "Approver Email"
+          },
+          "can_decide": {
+            "default": false,
+            "description": "True when the CALLER is this Case's approver. UI hint only.",
+            "title": "Can Decide",
+            "type": "boolean"
+          },
+          "case_id": {
+            "description": "The Case's id (the unit of work, not the message).",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "description": "Agent-specific business fields.",
+            "title": "Detail",
+            "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was denied or could not be routed, when it was.",
+            "title": "Reason"
+          },
+          "requester_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who filed it.",
+            "title": "Requester Email"
+          },
+          "status": {
+            "description": "Lifecycle status, e.g. pending_approval / booked / dead_letter.",
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "description": "One-line human summary of what was requested.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "agent",
+          "status"
+        ],
+        "title": "CaseCard",
+        "type": "object"
+      },
       "ChatRequest": {
         "description": "Body for ``POST /chat``.",
         "properties": {
@@ -68,6 +149,14 @@
             "description": "The assistant's answer text.",
             "title": "Answer",
             "type": "string"
+          },
+          "cases": {
+            "description": "Write Cases this turn produced or is asking a decision on. Empty on every read turn. Rendered as cards; the approve/deny buttons act on them.",
+            "items": {
+              "$ref": "#/components/schemas/CaseCard"
+            },
+            "title": "Cases",
+            "type": "array"
           },
           "latency_ms": {
             "description": "Server-side time to produce the answer.",

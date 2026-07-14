@@ -12,7 +12,7 @@ boundary — a stranger's list is empty, because there is nothing of theirs to s
 Every route resolves the agent through the registry (`services/write_agents.py`), so this
 file never imports a graph and never branches on an agent name."""
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.core.tools.principal import principal_from_user
 from backend.core.write import case_store
@@ -49,6 +49,40 @@ def read_case(agent: str, case_id: str, user: dict = Depends(traced_user)):
     if principal.email not in (case["employee_email"], case["approver_email"]):
         raise HTTPException(status_code=403, detail="Not your case")
     return {"agent": agent, "case": case, "audit": case_store.list_audit(spec, case_id)}
+
+
+@router.post("/{agent}/{case_id}/decision")
+async def decide_case(agent: str, case_id: str, request: Request,
+                      user: dict = Depends(traced_user)):
+    """THE human gate, one door for every agent. Leave's own decision endpoint demands a
+    Slack signature, so before this a manager could only approve a leave Case from Slack —
+    the chat could show them the Case but not let them act on it.
+
+    Authority comes from the CASE ROW, re-checked here: the caller must be the approver the
+    Case was routed to. Not the requester (nobody approves their own write), not anyone who
+    happens to hold the case_id, and never the client's own say-so. A Case that is not
+    awaiting a decision is a 409 — a second click must not re-drive a graph that already
+    ran past its interrupt."""
+    write_agent = _agent_or_404(agent)
+    body = await request.json()
+    decision = (body or {}).get("decision")
+    if decision not in ("approve", "deny"):
+        raise HTTPException(status_code=422, detail="decision must be 'approve' or 'deny'")
+
+    case = case_store.get_case(write_agent.spec, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="No such case")
+    principal = principal_from_user(user)
+    if principal.email != case.get("approver_email"):
+        raise HTTPException(status_code=403, detail="Not the approver for this case")
+    if case["status"] != "pending_approval":
+        raise HTTPException(status_code=409,
+                            detail=f"Case is {case['status']}, not pending_approval")
+
+    row = write_agent.resume(write_agent.graph, case_id=case_id, decision=decision,
+                             actor_id=principal.email)
+    return {"agent": agent, "case_id": case_id, "status": row["status"],
+            "result_id": row.get(write_agent.spec.result_column)}
 
 
 # --- admin surface: the DLQ and the breakers -------------------------------------------

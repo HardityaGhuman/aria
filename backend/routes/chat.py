@@ -26,6 +26,7 @@ from backend.core.session_store import session_store
 from backend.models import ChatRequest, ChatResponse
 from backend.models.request_models import RenameSessionRequest
 from backend.models.response_models import (
+    CaseCard,
     CreateSessionResponse,
     HistoryResponse,
     MessageResponse,
@@ -93,6 +94,7 @@ async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_curr
         latency_ms=latency_ms,
         session_id=req.session_id,
         status=result.status,
+        cases=[CaseCard(**c) for c in result.cases],
     )
 
 
