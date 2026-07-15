@@ -4,13 +4,14 @@ The onboarding write endpoints — JWT-native and in-app. Requester == subject: 
 hire files their own Case, so identity is the server-built Principal from the JWT
 (`principal_from_user(get_current_user)`), never typed identity. The manager decides.
 
-Two gates before the graph even starts, both deliberate:
-  - no manager in HRIS  => `unroutable`. There is no ungated write, ever, so a Case
-                           nobody can approve must END, not proceed.
-  - invalid role/tool   => `denied_policy`. The deterministic validator runs here too,
-                           so an off-catalog request never costs the manager attention.
-On decision we re-check that the caller's JWT identity == the Case's approver_email
-before resuming (never trust a case_id in a URL to imply authority).
+This route is TRANSPORT ONLY. The filing itself — the ONE extraction, the validator gate
+(off-catalog => denied_policy), the no-manager gate (=> unroutable), idempotency, and
+seeding the approved role/tools into the graph — lives in services/write_intake.py, the
+single implementation shared with the chat write lane. The route authenticates, computes
+the idempotency key (client-supplied or a raw-text hash), delegates to `file_onboarding`,
+and maps the returned Filing (or its ExtractionFailed) to the response. On decision we
+re-check that the caller's JWT identity == the Case's approver_email before resuming
+(never trust a case_id in a URL to imply authority).
 
 All routes are absent (404) unless ONBOARDING_AGENT_ENABLED."""
 import hashlib
@@ -19,18 +20,11 @@ import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.config import ONBOARDING_AGENT_ENABLED
-from backend.core.onboarding_case import (
-    create_case,
-    get_case,
-    get_case_by_idempotency_key,
-    list_audit,
-    transition,
-)
+from backend.core.onboarding_case import get_case, list_audit
 from backend.core.tools.principal import principal_from_user
 from backend.routes.deps import traced_user
-from backend.services.onboarding_extract import OnboardingExtractError, extract_onboarding_fields
-from backend.services.onboarding_graph import resume_case, start_case
-from backend.services.onboarding_validator import validate_onboarding
+from backend.services.onboarding_graph import resume_case
+from backend.services.write_intake import ExtractionFailed, file_onboarding
 
 router = APIRouter(prefix="/agents/onboarding", tags=["Onboarding Agent"])
 
@@ -69,13 +63,6 @@ def _idempotency_key(body: dict, email: str, text: str) -> str:
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _existing(case: dict) -> dict:
-    """Answer a duplicate submit from the row that already exists."""
-    return {"case_id": str(case["case_id"]), "status": case["status"],
-            "role": case.get("role"), "tools": case.get("tools"),
-            "approver_email": case.get("approver_email")}
-
-
 @router.post("")
 async def start_onboarding(request: Request, user: dict = Depends(traced_user)):
     _guard()
@@ -83,50 +70,21 @@ async def start_onboarding(request: Request, user: dict = Depends(traced_user)):
     body = await request.json()
     text = body["text"]
     idem = _idempotency_key(body, principal.email, text)
-
-    # Duplicate submit: the Case already exists and is already moving. READ it, never
-    # re-drive it — re-invoking the graph on a thread parked at the approval gate re-runs
-    # nodes and appends checkpoints (Ref1 §4's "fake resume"). Also saves the LLM call.
-    dup = get_case_by_idempotency_key(idem)
-    if dup is not None and dup["status"] != "draft":
-        return _existing(dup)
-
-    # The ONE extraction for this Case. Its output becomes the Case row and the graph's
-    # seeded state — so the tools the manager approves are exactly the tools the connector
-    # grants. A model that returns nothing usable ends the request HERE, before a Case
-    # exists: no half-built Case, no unhandled exception.
     try:
-        fields = extract_onboarding_fields(text)
-    except OnboardingExtractError as exc:
+        filing = file_onboarding(principal, text, hris=_HRIS, graph=_GRAPH, key=idem)
+    except ExtractionFailed as exc:
         raise HTTPException(status_code=422, detail="Could not understand the request") from exc
 
-    verdict = validate_onboarding(fields["role"], fields["extra_tools"])
-    approver_email = _HRIS.manager_email(principal) if _HRIS else None
-
-    case = create_case(principal.email, approver_email, fields["role"], verdict.tools, idem)
-    case_id = str(case["case_id"])
-
-    # Two submits can race past the lookup above; the UNIQUE key then makes create_case
-    # return the row the winner already advanced. Second line of defence, same rule.
-    if case["status"] != "draft":
-        return _existing(case)
-
-    if not verdict.ok:
-        row = transition(case_id, "denied_policy", "system", verdict.reason or "validation failed")
-        return {"case_id": case_id, "status": row["status"], "reason": verdict.reason,
-                "approver_email": None}
-    if not approver_email:
-        row = transition(case_id, "unroutable", "system", "no manager mapped")
-        return {"case_id": case_id, "status": row["status"], "approver_email": None}
-
-    # Seed role/extra_tools so the graph's extract node passes through — one extraction
-    # per Case, and the row the manager approves cannot diverge from the graph's state.
-    row = start_case(_GRAPH, case_id=case_id, principal=principal,
-                     raw_text=text, approver_email=approver_email,
-                     role=fields["role"], extra_tools=fields["extra_tools"])
-    return {"case_id": case_id, "status": row["status"], "role": fields["role"],
-            "tools": verdict.tools,
-            "approver_email": approver_email if row["status"] == "pending_approval" else None}
+    resp = {"case_id": filing.case_id, "status": filing.status,
+            "approver_email": filing.approver_email}
+    detail = filing.detail or {}
+    if "role" in detail:
+        resp["role"] = detail["role"]
+    if "tools" in detail:
+        resp["tools"] = detail["tools"]
+    if filing.reason:
+        resp["reason"] = filing.reason
+    return resp
 
 
 @router.post("/{case_id}/decision")
