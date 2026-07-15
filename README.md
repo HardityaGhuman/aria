@@ -1,13 +1,16 @@
-# Aria — Company Assistant
+# Aria — Controlled Multi-Agent Company Assistant
 
-Aria is an internal company assistant you use from **one chat box**.
+Aria is an internal company assistant you use from **one chat box**. Behind that box is a
+**multi-agent system**: a deterministic supervisor routes each request to exactly one
+specialist agent, and actions that change company data run as **LangGraph workflows** that
+pause for human approval.
 
 - **Ask** a policy question — *"How much PTO do I have left?"*, *"Who's out next week?"* —
-  and it answers from the real company documents you're allowed to see, with citations.
-  If it has no source or you're not cleared for the answer, it says so instead of guessing.
+  and a read specialist answers from the real company documents you're allowed to see, with
+  citations. No source or not cleared → it says so instead of guessing.
 - **Ask it to do something** — *"Book me two days off"*, *"File a Jira for the redesign"*,
-  *"Set up my access, I'm a new backend engineer"* — and it opens a request that a human
-  approves right there in the chat. Nothing changes company data until someone signs off.
+  *"Set up my access, I'm a new backend engineer"* — and a write agent opens an
+  approval-gated request. Nothing changes company data until a human signs off in the chat.
 
 The chat is the whole product: questions and actions both start in the same place.
 
@@ -19,56 +22,93 @@ The chat is the whole product: questions and actions both start in the same plac
 |---|---|
 | 💬 **Answer from documents** | Grounded replies with citations — never made up. No source, no answer. |
 | 🔒 **Respect who's asking** | You only see documents your role and region allow. |
-| ✅ **Take actions, safely** | Book leave, file a Jira, grant new-hire access — each needs human approval first. |
+| ✅ **Take actions, safely** | Book leave, file a Jira, grant new-hire access — each a LangGraph Case gated on human approval. |
 | 🧵 **Remember the conversation** | Per-user chat sessions with rolling summaries so long chats stay cheap. |
 | 📥 **Let HR manage the corpus** | Upload, delete, and re-index policy documents as a background job. |
 
 ---
 
-## How it works
+## Architecture
 
-Every message goes to a small, fast router that decides whether it's a **question** or an
-**action** — then hands it to the right place. Questions are answered from documents;
-actions become approval-gated requests. A human is always in the loop before anything is
-written, and the AI never decides *what* to do on its own — it only classifies the request
-and writes the wording.
+A small, fast **router** classifies each message, then a **deterministic supervisor** sends
+it to exactly one agent — never a free-for-all, never one agent calling another. The AI
+classifies the request and writes the wording; it never decides *what action to take* or
+*which agent runs* — a fixed table does that. A human is always in the loop before any write.
+
+**Read agents** answer questions. **Write agents** take actions, and each one runs as a
+**LangGraph Case**: a typed, checkpointed workflow that **pauses at an interrupt** to wait
+for a human's Approve/Deny and **resumes exactly where it left off** — surviving a server
+restart, never running the same action twice.
 
 ```mermaid
 flowchart TB
     User([User]) --> Chat[One chat box]
-    Chat --> Router{Question or action?}
+    Chat --> Router[Router: classify the request]
+    Router --> Supervisor{Supervisor picks ONE agent}
 
-    Router -->|Question| Search[Search the documents<br/>you're allowed to see]
-    Search --> Answer[Grounded answer<br/>with citations]
+    Supervisor -->|question| Reads
+    Supervisor -->|action| Writes
 
-    Router -->|Action| Request[Open an approval request]
-    Request --> Gate{Human approves?}
-    Gate -->|Yes| Act[Do it — book leave,<br/>file Jira, grant access]
-    Gate -->|No| Skip[Nothing changes]
+    subgraph Reads [Read agents]
+        direction LR
+        Policy[Policy]
+        HR[HR: your leave balance]
+        Calendar[Calendar: who's out]
+    end
+
+    subgraph Writes [Write agents · LangGraph Cases]
+        direction LR
+        Leave[Leave]
+        Jira[Jira]
+        Onboarding[New-hire access]
+    end
+
+    Reads --> Retrieve[Search allowed documents] --> Answer[Grounded answer + citations]
+
+    Writes --> Case[Open a Case] --> Approve{Human approves?}
+    Approve -->|Yes| Act[Run the action]
+    Approve -->|No| Skip[Nothing changes]
 
     Answer --> Reply([Reply in the chat])
     Act --> Reply
     Skip --> Reply
 ```
 
-**Questions** are answered by combining meaning-based and keyword search over the policy
-documents, filtered to what you're allowed to see, then written up by a language model that
-is only allowed to use the retrieved text.
+### Read agents
 
-**Actions** run as tracked requests with a clear lifecycle — *submitted → waiting for
-approval → done* (or *denied*). Each one survives a server restart, can't be accidentally
-run twice, and keeps an audit trail. The three action types today are **Leave**, **Jira**,
-and **New-hire access**.
+One supervisor delegates to exactly one specialist per request; each reaches only its own tool.
+
+| Agent | Answers | Backed by |
+|---|---|---|
+| **Policy** | Any policy question | Document search only |
+| **HR** | *Your own* leave balance, plus policy | HR system (mock) + search |
+| **Calendar** | Who's out over a date range | Calendar (mock) + search |
+
+Questions are answered by merging semantic (pgvector) and keyword (BM25) search, filtered to
+what you're allowed to see, then written up by a model that may only use the retrieved text.
+
+### Write agents
+
+Each runs as a LangGraph Case with a clear lifecycle — *submitted → waiting for approval →
+done* (or *denied*) — an audit trail, and a shared reliability boundary (retries, circuit
+breaker, dead-letter queue) so a flaky downstream system never loses or double-runs an action.
+
+| Agent | Action | Downstream (mock) |
+|---|---|---|
+| **Leave** | Book time off | HR system |
+| **Jira** | File an issue in the right project | Jira |
+| **New-hire access** | Grant a role's access bundle | Access provisioner |
 
 ---
 
 ## Security, in short
 
 - **Identity comes from your login, never from the chat.** You can't act as someone else by
-  asking nicely.
+  asking nicely, and the approver is decided by the system, not the requester.
 - **You only see what your role and region permit** — restricted text never even reaches the
   model when you're not cleared for it.
 - **No action happens without human approval**, and every action is logged.
+- **The control path has no AI in it** — routing, approval, and retries are plain, testable code.
 
 ---
 
@@ -78,10 +118,11 @@ and **New-hire access**.
 |---|---|
 | Backend | FastAPI (regular + streaming chat) |
 | Frontend | React (Vite + TanStack Query) |
+| Multi-agent | Deterministic supervisor + scoped specialist agents (hand-rolled) |
+| Action workflows | **LangGraph** — typed Cases, checkpointing, interrupt/resume |
 | AI gateway | LiteLLM — provider-agnostic (default Groq models) |
 | Search | PostgreSQL + pgvector (semantic) and BM25 (keyword), merged |
 | Embeddings | Sentence-Transformers `all-MiniLM-L6-v2` (local) |
-| Action workflows | LangGraph (approval-gated, resumable) |
 | Storage | PostgreSQL (app data) + AWS S3 (original files) |
 | Auth | JWT + bcrypt, 3-tier role-based access + region |
 
@@ -133,9 +174,9 @@ Protected routes need `Authorization: Bearer <token>`. The full typed contract i
 
 ## Status
 
-- **Answering questions:** shipped and live.
-- **Taking actions:** the backend is complete (Leave, Jira, new-hire access); the chat UI
-  for approving requests is next.
+- **Read agents:** shipped and live.
+- **Write agents:** backend complete (Leave, Jira, new-hire access) as LangGraph Cases; the
+  chat UI for approving requests is next.
 
 Everything action-related is behind feature flags — with them off, Aria behaves exactly like
 the read-only assistant.
