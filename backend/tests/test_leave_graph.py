@@ -21,7 +21,9 @@ class _FakeCaseStore:
     def __init__(self):
         self.rows = {}
 
-    def transition(self, case_id, new_status, actor_id, detail, *, confirmation_id=None):
+    def transition(self, case_id, new_status, actor_id, detail, *, confirmation_id=None, **kw):
+        # **kw: the shared write node passes control columns (attempt, failure_reason);
+        # this fake predates them and only needs to not choke on them.
         self.rows[case_id]["status"] = new_status
         if confirmation_id:
             self.rows[case_id]["confirmation_id"] = confirmation_id

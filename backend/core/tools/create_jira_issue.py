@@ -9,6 +9,7 @@ select it."""
 from backend.core.jira import JiraClient
 from backend.core.tools.base import ToolResult
 from backend.core.tools.principal import Principal
+from backend.core.write.errors import PermanentWriteError
 
 
 class CreateJiraIssueTool:
@@ -35,13 +36,17 @@ class CreateJiraIssueTool:
         self._jira = jira
 
     def invoke(self, args: dict, principal: Principal) -> ToolResult:
+        # Connector errors are NOT caught here: Transient/PermanentWriteError propagate to
+        # the graph, the only layer allowed to classify a failure and decide retry-vs-stop.
+        # An unknown project is PERMANENT — it will still be unknown on the retry, so
+        # spending the budget on it only delays the escalation to a human.
         try:
             created = self._jira.create_issue(
                 principal, args["case_id"], args["project"], args["issue_type"],
                 args["summary"], args["description"],
             )
         except KeyError as exc:
-            return ToolResult(status="error", error=f"could not create issue: {exc}")
+            raise PermanentWriteError(f"could not create issue: {exc}") from exc
         return ToolResult(
             status="ok",
             data={"issue_key": created["issue_key"], "url": created["url"]},

@@ -10,16 +10,27 @@ _BASE_URL = "https://jira.mock.gsvh.test/browse"
 
 
 class MockJira:
-    def __init__(self, projects: list[str] | None = None) -> None:
+    def __init__(self, projects: list[str] | None = None, fail_times: int = 0,
+                 fail_with: type[Exception] | None = None) -> None:
         self._projects = set(projects or ["MARKETING", "DESIGN", "FINANCE", "IT", "OFFICE"])
         self._counters: dict[str, int] = {}
         # case_id -> {"issue_key", "url"} — idempotency ledger.
         self._issues: dict[str, dict] = {}
+        # Failure injection (mirrors MockAccessProvisioner): lets the graph tests drive
+        # transient-then-success, budget exhaustion, and breaker-open with no network.
+        self._fail_remaining = fail_times
+        self._fail_with = fail_with
 
     def create_issue(
         self, principal: Principal, case_id: str, project: str,
         issue_type: str, summary: str, description: str,
     ) -> dict:
+        # Injection runs AHEAD of the idempotency check: a connector that fails before it
+        # commits is exactly the transient case the retry edge exists for.
+        if self._fail_remaining > 0 and self._fail_with is not None:
+            self._fail_remaining -= 1
+            raise self._fail_with(f"injected failure for case {case_id}")
+
         # Idempotent replay: same case_id -> same issue, no second key minted.
         prior = self._issues.get(case_id)
         if prior is not None:

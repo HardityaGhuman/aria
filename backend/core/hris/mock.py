@@ -20,12 +20,17 @@ _SEED = {
 
 
 class MockHRIS:
-    def __init__(self, seed: dict | None = None) -> None:
+    def __init__(self, seed: dict | None = None, fail_times: int = 0,
+                 fail_with: type[Exception] | None = None) -> None:
         # Copy so a test mutating rows can't bleed into another test.
         source = _SEED if seed is None else seed
         self._rows = {email: dict(row) for email, row in source.items()}
         # case_id -> {"confirmation_id", "email", "days"} — idempotency ledger.
         self._bookings: dict[str, dict] = {}
+        # Failure injection (mirrors MockAccessProvisioner): lets the graph tests drive
+        # transient-then-success, budget exhaustion, and breaker-open with no network.
+        self._fail_remaining = fail_times
+        self._fail_with = fail_with
 
     def get_balance(self, principal: Principal) -> dict | None:
         row = self._rows.get(principal.email) if principal.email else None
@@ -42,11 +47,22 @@ class MockHRIS:
     def submit_leave(
         self, principal: Principal, case_id: str, start_date: str, end_date: str, days: int
     ) -> dict:
+        # Injection runs AHEAD of the idempotency check: a connector that fails before it
+        # commits is exactly the transient case the retry edge exists for.
+        if self._fail_remaining > 0 and self._fail_with is not None:
+            self._fail_remaining -= 1
+            raise self._fail_with(f"injected failure for case {case_id}")
+
         # Idempotent replay: same case_id -> same confirmation, no second decrement.
+        # The echo is part of the replay too: the graph verifies the payload on EVERY
+        # attempt, so a replay must be able to prove what it booked just like a first try.
         prior = self._bookings.get(case_id)
         if prior is not None:
             row = self._rows[prior["email"]]
-            return {"confirmation_id": prior["confirmation_id"], "remaining": row["total_pto"] - row["pto_used"]}
+            return {"confirmation_id": prior["confirmation_id"],
+                    "remaining": row["total_pto"] - row["pto_used"],
+                    "start_date": prior["start_date"], "end_date": prior["end_date"],
+                    "days": prior["days"]}
 
         row = self._rows.get(principal.email) if principal.email else None
         if row is None:
@@ -56,5 +72,10 @@ class MockHRIS:
         confirmation_id = f"BK-{uuid.uuid4().hex[:10].upper()}"
         self._bookings[case_id] = {
             "confirmation_id": confirmation_id, "email": principal.email, "days": days,
+            "start_date": start_date, "end_date": end_date,
         }
-        return {"confirmation_id": confirmation_id, "remaining": row["total_pto"] - row["pto_used"]}
+        # The connector ECHOES what it actually booked. Without the echo the graph cannot
+        # check execution against correctness — it would have to take "no exception" as
+        # proof, which is exactly the silent failure the verify step exists to catch.
+        return {"confirmation_id": confirmation_id, "remaining": row["total_pto"] - row["pto_used"],
+                "start_date": start_date, "end_date": end_date, "days": days}

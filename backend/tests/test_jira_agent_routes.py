@@ -1,5 +1,10 @@
-"""Jira agent routes: JWT-native auth, unroutable resolution, approver re-check,
-kill switch. Hermetic — minimal app, monkeypatched collaborators (no network/DB/graph)."""
+"""Jira agent routes: JWT-native auth, delegation to the shared filer, approver
+re-check, kill switch. The FILING logic (idempotency, extract, unroutable resolution,
+graph start) is owned by services/write_intake.py and tested in test_write_intake.py —
+these tests only prove the route's transport: it authenticates, delegates to
+write_intake.file_jira with the SERVER principal and the raw text, maps the returned
+Filing to the response, and re-checks the approver on decision. Hermetic — minimal app,
+monkeypatched collaborators (no network/DB/graph)."""
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
@@ -7,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import backend.routes.jira_agent as jira_agent
 from backend.core.auth import get_current_user
+from backend.services.write_intake import Filing
 
 
 def _client(user_email="employee@gsvh.test", role="employee"):
@@ -17,11 +23,8 @@ def _client(user_email="employee@gsvh.test", role="employee"):
     return TestClient(app)
 
 
-def _enable(monkeypatch, approvers=None):
+def _enable(monkeypatch):
     monkeypatch.setattr(jira_agent, "JIRA_AGENT_ENABLED", True)
-    monkeypatch.setattr(jira_agent, "JIRA_PROJECT_APPROVERS",
-                        approvers if approvers is not None else {"MARKETING": "cmo@gsvh.test"})
-    monkeypatch.setattr(jira_agent, "JIRA_ALLOWED_PROJECTS", ["MARKETING", "DESIGN"])
 
 
 def test_routes_absent_when_disabled(monkeypatch):
@@ -30,39 +33,43 @@ def test_routes_absent_when_disabled(monkeypatch):
     assert r.status_code == 404
 
 
-def test_undetermined_project_is_unroutable(monkeypatch):
+def test_unroutable_filing_passes_through(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(jira_agent, "extract_jira_fields",
-                        lambda t: {"project": "", "issue_type": "Task", "summary": "s", "description": ""})
-    monkeypatch.setattr(jira_agent, "create_case",
-                        lambda *a, **k: {"case_id": "cid"})
-    monkeypatch.setattr(jira_agent, "transition", lambda *a, **k: {"case_id": "cid", "status": "unroutable"})
+    monkeypatch.setattr(jira_agent, "file_jira",
+                        lambda *a, **k: Filing("jira", "cid", "unroutable"))
     r = _client().post("/agents/jira", json={"text": "do something"})
     assert r.status_code == 200
     assert r.json()["status"] == "unroutable"
+    assert r.json()["approver_email"] is None
 
 
-def test_unmapped_project_is_unroutable(monkeypatch):
-    _enable(monkeypatch, approvers={})  # MARKETING in allowlist but no approver
-    monkeypatch.setattr(jira_agent, "extract_jira_fields",
-                        lambda t: {"project": "MARKETING", "issue_type": "Task", "summary": "s", "description": ""})
-    monkeypatch.setattr(jira_agent, "create_case", lambda *a, **k: {"case_id": "cid"})
-    monkeypatch.setattr(jira_agent, "transition", lambda *a, **k: {"case_id": "cid", "status": "unroutable"})
-    r = _client().post("/agents/jira", json={"text": "marketing thing"})
-    assert r.json()["status"] == "unroutable"
-
-
-def test_mapped_project_starts_case(monkeypatch):
+def test_pending_filing_exposes_the_approver(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(jira_agent, "extract_jira_fields",
-                        lambda t: {"project": "MARKETING", "issue_type": "Task", "summary": "s", "description": ""})
-    monkeypatch.setattr(jira_agent, "create_case", lambda *a, **k: {"case_id": "cid"})
-    monkeypatch.setattr(jira_agent, "start_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "pending_approval", "approver_email": "cmo@gsvh.test"})
+    monkeypatch.setattr(jira_agent, "file_jira",
+                        lambda *a, **k: Filing("jira", "cid", "pending_approval",
+                                               approver_email="cmo@gsvh.test"))
     r = _client().post("/agents/jira", json={"text": "marketing landing page"})
     body = r.json()
+    assert body["case_id"] == "cid"
     assert body["status"] == "pending_approval"
     assert body["approver_email"] == "cmo@gsvh.test"
+
+
+def test_route_delegates_with_the_server_principal_and_raw_text(monkeypatch):
+    """Identity is the JWT-built principal, never typed; the raw text (not the model's
+    output) is what the filer keys and extracts from."""
+    _enable(monkeypatch)
+    seen = {}
+
+    def _fake(principal, text, **k):
+        seen["email"] = principal.email
+        seen["text"] = text
+        return Filing("jira", "cid", "pending_approval", approver_email="cmo@gsvh.test")
+
+    monkeypatch.setattr(jira_agent, "file_jira", _fake)
+    _client(user_email="dev@gsvh.test").post("/agents/jira", json={"text": "landing page"})
+    assert seen["email"] == "dev@gsvh.test"
+    assert seen["text"] == "landing page"
 
 
 def test_non_approver_decision_rejected(monkeypatch):

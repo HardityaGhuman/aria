@@ -8,6 +8,7 @@ import litellm
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from backend.core.config import (
+    CHAT_WRITE_ENABLED,
     LLM_CONTEXT_TOKEN_BUDGET,
     LLM_MAX_RETRIES,
     LLM_RETRY_BASE_DELAY,
@@ -191,17 +192,44 @@ def _build_messages(system_prompt: str, user_prompt: str, history: list[dict] | 
     return _to_litellm_messages(formatted)
 
 
+# The write lanes. Offered to the classifier ONLY when CHAT_WRITE_ENABLED — with the flag
+# off, the model never sees them, so the read build's classification is byte-identical.
+# Naming the intent is all the model does: a fixed table (read_planner.agent_for_intent)
+# turns the label into an agent, and that agent's own validator + human gate still stand.
+WRITE_LABELS = ("write_leave", "write_jira", "write_onboarding", "approvals")
+
+_WRITE_TASK_LABELS = ", write_leave, write_jira, write_onboarding, approvals"
+
+_WRITE_LABEL_BLOCK = """
+- write_leave: the user is ASKING FOR leave / time off / PTO to be booked for them — an action, not a question about the rule or their balance. Signals: "book me...", "I need X days off", "put me down for leave on...", "request leave for next week", "apply for PTO". A question about the leave POLICY is still policy; a question about their own BALANCE is still hr. Only an actual request to take the days is write_leave.
+- write_jira: the user is asking for a piece of WORK to be filed with another team — a task, bug, or request that becomes a ticket. Signals: "file a ticket/issue for...", "raise a request to...", "ask marketing to...", "we need a landing page redesign", "log a bug about...".
+- write_onboarding: the user is asking for ACCESS or tools to be provisioned, typically as a new joiner. Signals: "I'm starting as a backend engineer", "I need access to...", "set me up with GitHub and Figma", "get me the standard tools for my role".
+- approvals: the user is asking about decisions AWAITING THEM as an approver, or telling us to act on one. Signals: "what needs my approval", "anything waiting on me", "show me pending requests", "approve the leave request", "any approvals pending".
+"""
+
+_WRITE_DISAMBIGUATION = """
+- "how many leave days do I have" -> hr (their live balance). "what is the leave policy" -> policy (a rule). "book me 2 days off next week" -> write_leave (an action). These three are different lanes; the presence of the word "leave" decides nothing.
+- A request to CREATE something in another system (a ticket, an access grant, a leave booking) is a write lane, NOT out_of_scope. out_of_scope's "no creating artifacts" rule is about writing prose/documents FOR the user, not about taking an action in a company system.
+- "what needs my approval" / "approve that" -> approvals.
+"""
+
+
 def classify_query(user_message: str, history: list[dict]) -> str:
-    """Classify routing before retrieval so non-policy queries skip RAG."""
+    """Classify routing before retrieval so non-policy queries skip RAG.
+
+    With CHAT_WRITE_ENABLED, the label set also carries the four write lanes — the chat is
+    the product surface, so "book me 2 days off" must reach the leave agent rather than be
+    answered with a policy citation (or refused as content-generation)."""
+    write_on = CHAT_WRITE_ENABLED
     history_excerpt = "\n".join(
         f"{msg.get('role', 'user')}: {msg.get('content', '')}"
         for msg in history[-6:]
         if msg.get("content")
     ) or "No prior conversation."
     classification_prompt = f"""### 1. Task
-Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, hr, calendar, meta, chitchat, or out_of_scope. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
+Classify the user's latest query for a company policy assistant. Return exactly one label and nothing else: policy, hr, calendar, meta, chitchat, or out_of_scope{_WRITE_TASK_LABELS if write_on else ""}. Decide what the query is fundamentally ABOUT and what would be needed to answer it — not merely what topic words it contains.
 
-### 2. Labels
+### 2. Labels{_WRITE_LABEL_BLOCK if write_on else ""}
 - policy: the query needs the SUBSTANCE of a company rule, benefit, entitlement, procedure, handbook topic, or operational practice to answer, OR it asks for guidance on how to handle, report, or resolve a real workplace situation the company's policies govern — incidents, losses, errors, access problems, eligibility, requests, or entitlements. This holds regardless of grammatical person or phrasing: "what is the policy on X", "what do I do if Y happens", "how / who do I report Z to", and conversational, first-person, or situational wordings all count. It also includes asking to summarize or explain a policy topic, and follow-ups that ask for MORE policy detail even when they reference the prior turn. When in doubt between policy and out_of_scope, choose policy — retrieval can still decline if nothing relevant is found.
 - hr: like policy, but the query needs LIVE data about the CALLER'S OWN leave from company HR/people systems (not the handbook) to answer — their remaining leave/PTO balance, how many days they have left, or their own leave record. Signals: "how many leaves/PTO/days do I have left", "what's my balance", "how much leave have I used". A generic question about the leave POLICY (accrual rules, who is eligible, how carryover works) is still policy, not hr — hr is only when the answer needs the caller's live personal numbers, not a document rule.
 - calendar: the query needs the TEAM'S current out-of-office status from the live company calendar (not the handbook) to answer — who is away, out, on leave, or on vacation right now, and until when. Signals: "who is out/away today/this week", "who is on leave/vacation", "is anyone off", "is <name> in". A generic question about the leave POLICY is still policy; calendar is only when the answer needs the live away-list.
@@ -209,7 +237,7 @@ Classify the user's latest query for a company policy assistant. Return exactly 
 - chitchat: a greeting, thanks, farewell, or light social pleasantry, or a simple question about Aria itself or its capabilities ("hi", "hello", "good morning", "thanks", "how are you", "who are you", "are you real", "what can you do", "what can you help with"). No company-policy substance is needed and nothing in the transcript is needed — it just deserves a warm, brief, human reply. This is NOT out_of_scope.
 - out_of_scope: general knowledge, code, or tasks with no connection to the company, OR any request to CREATE a new artifact (report, email, document, presentation, script, essay, policy draft). Content-generation is out_of_scope even when the topic is company policy. A genuine question about handling or reporting a workplace situation is NOT out_of_scope simply because it is phrased personally or asks "what do I do" — that is policy.
 
-### 3. Disambiguation
+### 3. Disambiguation{_WRITE_DISAMBIGUATION if write_on else ""}
 - A greeting, thanks, farewell, or a question about who/what Aria is or what it can do -> chitchat (warm reply), NOT out_of_scope.
 - A request for the rule, entitlement, or the procedure to handle/report a workplace situation -> policy, no matter how conversational or first-person the wording.
 - "how many leaves/days do I have left" / "what's my leave balance" / "how much PTO have I used" -> hr (needs the caller's live personal data).
@@ -249,6 +277,14 @@ Latest query:
         temperature=0,
     )
     label = response.choices[0].message.content.strip().lower()
+    # The write lanes are matched FIRST (and only when enabled): they are the only labels
+    # that are exact words, and with the flag off a leaked `write_*` must fall through to
+    # the read table rather than reach an agent. A `write_<agent>` we do not run (say a
+    # hallucinated write_gcal) is NOT a write lane — it lands on policy like any unknown.
+    if write_on:
+        for write_label in WRITE_LABELS:
+            if write_label in label:
+                return write_label
     if "meta" in label:
         return "meta"
     if "chitchat" in label or "chit chat" in label:

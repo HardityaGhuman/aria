@@ -24,6 +24,7 @@ import backend.routes.onboarding_agent as onboarding_agent
 from backend.core.auth import get_current_user
 from backend.core.trace import current_trace
 from backend.core.write.trace import case_node_started
+from backend.services.write_intake import Filing
 
 
 def _app(module, user_role="employee"):
@@ -53,19 +54,16 @@ def seen():
 def _stub_onboarding(monkeypatch, seen):
     monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
     onboarding_agent.set_hris(_FakeHRIS())
-    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
-                        lambda t: {"role": "backend-eng", "extra_tools": []})
-    monkeypatch.setattr(onboarding_agent, "get_case_by_idempotency_key", lambda k: None)
-    monkeypatch.setattr(onboarding_agent, "create_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "draft"})
 
-    def _start(*_a, **_k):
-        # Stands in for the graph: whatever a node emits mid-request must carry the id.
+    def _file(principal, text, **_k):
+        # Stands in for the filer+graph: whatever it emits mid-request must carry the id.
         seen["trace"] = current_trace()
         case_node_started("cid", "validate")
-        return {"case_id": "cid", "status": "pending_approval"}
+        return Filing("onboarding", "cid", "pending_approval",
+                      approver_email="manager@gsvh.test",
+                      detail={"role": "backend-eng", "tools": []})
 
-    monkeypatch.setattr(onboarding_agent, "start_case", _start)
+    monkeypatch.setattr(onboarding_agent, "file_onboarding", _file)
 
 
 def test_onboarding_start_runs_inside_a_trace_and_events_carry_the_id(monkeypatch, seen, caplog):
@@ -104,32 +102,36 @@ def test_onboarding_decision_runs_inside_a_trace(monkeypatch, seen):
 
 
 def test_admin_replay_runs_inside_a_trace(monkeypatch, seen):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "dead_letter"})
+    """The replay lives on the agent-agnostic /admin/write surface now, but the property is
+    the same: the work the replay drives must emit under a trace id."""
+    import backend.routes.write_cases as write_cases
 
-    def _replay(*_a, **_k):
+    def _replay(_graph, *, case_id, actor_id):
         seen["trace"] = current_trace()
-        return {"case_id": "cid", "status": "provisioned"}
+        return {"case_id": case_id, "status": "provisioned", "grant_id": "g1"}
 
-    monkeypatch.setattr(onboarding_agent, "replay_case", _replay)
-    r = _app(onboarding_agent, user_role="hr").post("/admin/onboarding/cases/cid/replay")
+    class _Agent:
+        name = "onboarding"
+        spec = type("S", (), {"result_column": "grant_id"})()
+        graph = None
+        replay = staticmethod(_replay)
+
+    monkeypatch.setattr(write_cases, "_agent_or_404", lambda name: _Agent())
+    monkeypatch.setattr(write_cases.case_store, "get_case",
+                        lambda spec, cid: {"case_id": cid, "status": "dead_letter"})
+    r = _app(write_cases, user_role="hr").post("/admin/write/cases/onboarding/cid/replay")
     assert r.status_code == 200
     assert seen["trace"] is not None
 
 
 def test_jira_start_runs_inside_a_trace(monkeypatch, seen):
     monkeypatch.setattr(jira_agent, "JIRA_AGENT_ENABLED", True)
-    monkeypatch.setattr(jira_agent, "extract_jira_fields", lambda t: {
-        "project": "MARKETING", "issue_type": "Task", "summary": "s", "description": "d"})
-    monkeypatch.setattr(jira_agent, "JIRA_PROJECT_APPROVERS", {"MARKETING": "manager@gsvh.test"})
-    monkeypatch.setattr(jira_agent, "create_case", lambda *a, **k: {"case_id": "cid"})
 
-    def _start(*_a, **_k):
+    def _file(principal, text, **_k):
         seen["trace"] = current_trace()
-        return {"case_id": "cid", "status": "pending_approval"}
+        return Filing("jira", "cid", "pending_approval", approver_email="manager@gsvh.test")
 
-    monkeypatch.setattr(jira_agent, "start_case", _start)
+    monkeypatch.setattr(jira_agent, "file_jira", _file)
     r = _app(jira_agent).post("/agents/jira", json={"text": "make a task"})
     assert r.status_code == 200
     assert seen["trace"] is not None
@@ -145,18 +147,13 @@ def test_leave_start_runs_inside_a_trace(monkeypatch, seen):
     monkeypatch.setattr(leave_agent, "verify_slack_signature", lambda *a, **k: True)
     monkeypatch.setattr(leave_agent, "principal_for_slack",
                         lambda sid: Principal(user_id=7, email="a@gsvh.test", role="employee", region="us"))
-    monkeypatch.setattr(leave_agent, "extract_leave_fields", lambda t: {
-        "start_date": "2026-08-01", "end_date": "2026-08-02", "reason": "trip"})
-    monkeypatch.setattr(leave_agent, "compute_days", lambda a, b: 2)
-    monkeypatch.setattr(leave_agent, "create_case", lambda *a, **k: {"case_id": "cid"})
     monkeypatch.setattr(leave_agent, "slack_user_for_email", lambda e: "U1")
-    monkeypatch.setattr(leave_agent, "_HRIS", _FakeHRIS())
 
-    def _start(*_a, **_k):
+    def _file(principal, text, **_k):
         seen["trace"] = current_trace()
-        return {"case_id": "cid", "status": "pending_approval"}
+        return Filing("leave", "cid", "pending_approval", approver_email="manager@gsvh.test")
 
-    monkeypatch.setattr(leave_agent, "start_case", _start)
+    monkeypatch.setattr(leave_agent, "file_leave", _file)
     r = _app(leave_agent).post("/agents/leave",
                                json={"slack_user_id": "U1", "text": "2 days off"})
     assert r.status_code == 200

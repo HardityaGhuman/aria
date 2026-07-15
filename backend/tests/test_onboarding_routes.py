@@ -1,6 +1,11 @@
-"""Onboarding routes: JWT-native identity, unroutable (no manager) before the gate,
-server-side approver re-check, IDOR-checked reads, kill switch. Hermetic — minimal
-app, monkeypatched collaborators (no network, no DB, no graph)."""
+"""Onboarding routes: JWT-native identity, delegation to the shared filer, server-side
+approver re-check, IDOR-checked reads, kill switch. The FILING logic (one extraction,
+validator gate, unroutable/denied resolution, idempotency, graph seeding) is owned by
+services/write_intake.py and tested in test_write_intake.py — these tests only prove the
+route's transport: it authenticates, computes the idempotency key (client-supplied or a
+raw-text hash), delegates to write_intake.file_onboarding, maps the Filing (or its
+ExtractionFailed) to the response, and IDOR-checks the read. Hermetic — minimal app,
+monkeypatched collaborators (no network, no DB, no graph)."""
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
@@ -8,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import backend.routes.onboarding_agent as onboarding_agent
 from backend.core.auth import get_current_user
+from backend.services.write_intake import ExtractionFailed, Filing
 
 
 def _client(user_email="newhire@gsvh.test", role="employee"):
@@ -18,22 +24,9 @@ def _client(user_email="newhire@gsvh.test", role="employee"):
     return TestClient(app)
 
 
-class _FakeHRIS:
-    def __init__(self, manager="manager@gsvh.test"):
-        self._manager = manager
-
-    def manager_email(self, principal):
-        return self._manager
-
-
-def _enable(monkeypatch, manager="manager@gsvh.test"):
+def _enable(monkeypatch):
     monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    onboarding_agent.set_hris(_FakeHRIS(manager))
-    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
-                        lambda t: {"role": "backend-eng", "extra_tools": []})
-    monkeypatch.setattr(onboarding_agent, "get_case_by_idempotency_key", lambda key: None)
-    monkeypatch.setattr(onboarding_agent, "create_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "draft"})
+    onboarding_agent.set_hris(object())  # file_onboarding is mocked; hris is unused here
 
 
 def test_routes_absent_when_disabled(monkeypatch):
@@ -41,46 +34,61 @@ def test_routes_absent_when_disabled(monkeypatch):
     assert _client().post("/agents/onboarding", json={"text": "x"}).status_code == 404
 
 
-def test_no_manager_is_unroutable_before_the_gate(monkeypatch):
-    _enable(monkeypatch, manager=None)
-    monkeypatch.setattr(onboarding_agent, "transition",
-                        lambda *a, **k: {"case_id": "cid", "status": "unroutable"})
+def test_unroutable_filing_passes_through(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(onboarding_agent, "file_onboarding",
+                        lambda *a, **k: Filing("onboarding", "cid", "unroutable",
+                                               detail={"role": "backend-eng", "tools": []}))
     r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
     assert r.status_code == 200
     assert r.json()["status"] == "unroutable"
+    assert r.json()["approver_email"] is None
 
 
-def test_off_catalog_request_is_denied_policy_without_starting_the_graph(monkeypatch):
+def test_denied_policy_filing_passes_through_with_reason(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
-                        lambda t: {"role": "astronaut", "extra_tools": []})
-    monkeypatch.setattr(onboarding_agent, "transition",
-                        lambda *a, **k: {"case_id": "cid", "status": "denied_policy"})
+    monkeypatch.setattr(onboarding_agent, "file_onboarding",
+                        lambda *a, **k: Filing("onboarding", "cid", "denied_policy",
+                                               detail={"role": "astronaut", "tools": []},
+                                               reason="astronaut is not a known role"))
     r = _client().post("/agents/onboarding", json={"text": "make me an astronaut"})
-    assert r.json()["status"] == "denied_policy"
+    body = r.json()
+    assert body["status"] == "denied_policy"
+    assert body["reason"] == "astronaut is not a known role"
 
 
-def test_valid_request_starts_the_case(monkeypatch):
+def test_pending_filing_exposes_approver_role_and_tools(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(onboarding_agent, "start_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "pending_approval"})
+    monkeypatch.setattr(onboarding_agent, "file_onboarding",
+                        lambda *a, **k: Filing("onboarding", "cid", "pending_approval",
+                                               approver_email="manager@gsvh.test",
+                                               detail={"role": "backend-eng",
+                                                       "tools": ["github", "aws"]}))
     r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
     body = r.json()
     assert body["status"] == "pending_approval"
     assert body["approver_email"] == "manager@gsvh.test"
+    assert body["role"] == "backend-eng"
+    assert body["tools"] == ["github", "aws"]
 
 
-def test_route_seeds_its_extraction_into_the_graph(monkeypatch):
-    """One extraction per Case: the graph must receive the SAME role/tools that were
-    written on the Case row, or the manager approves one bundle and the connector
-    grants another."""
+def test_route_delegates_with_the_server_principal_and_raw_text(monkeypatch):
+    """Requester == subject: identity is the JWT principal, never typed; the raw text
+    (not the model's output) is what the filer keys and extracts from."""
     _enable(monkeypatch)
     seen = {}
-    monkeypatch.setattr(onboarding_agent, "start_case",
-                        lambda *a, **k: seen.update(k) or {"case_id": "cid", "status": "pending_approval"})
-    _client().post("/agents/onboarding", json={"text": "backend engineer"})
-    assert seen["role"] == "backend-eng"
-    assert seen["extra_tools"] == []
+
+    def _fake(principal, text, **k):
+        seen["email"] = principal.email
+        seen["text"] = text
+        return Filing("onboarding", "cid", "pending_approval",
+                      approver_email="manager@gsvh.test",
+                      detail={"role": "backend-eng", "tools": ["github"]})
+
+    monkeypatch.setattr(onboarding_agent, "file_onboarding", _fake)
+    _client(user_email="hire@gsvh.test").post("/agents/onboarding", json={"text": "backend engineer"})
+    assert seen["email"] == "hire@gsvh.test"
+    assert seen["text"] == "backend engineer"
 
 
 def test_idempotency_key_is_keyed_off_raw_text_not_model_output(monkeypatch):
@@ -94,64 +102,24 @@ def test_idempotency_key_is_keyed_off_raw_text_not_model_output(monkeypatch):
     assert k1 != onboarding_agent._idempotency_key({}, "b@gsvh.test", "backend engineer, plus figma")
 
 
-def test_duplicate_submit_returns_the_existing_case_without_extracting_or_invoking_the_graph(monkeypatch):
-    """Ref1 §4 'fake resume': the old route re-invoked the graph from START on a thread
-    that was already interrupted at the approval gate — re-running nodes and appending
-    checkpoints. A Case that already exists is READ, never re-driven."""
-    _enable(monkeypatch)
-    calls = {"extract": 0, "graph": 0, "create": 0}
-    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields",
-                        lambda t: calls.update(extract=calls["extract"] + 1) or
-                        {"role": "backend-eng", "extra_tools": []})
-    monkeypatch.setattr(onboarding_agent, "create_case",
-                        lambda *a, **k: calls.update(create=calls["create"] + 1) or
-                        {"case_id": "cid", "status": "draft"})
-    monkeypatch.setattr(onboarding_agent, "start_case",
-                        lambda *a, **k: calls.update(graph=calls["graph"] + 1) or
-                        {"case_id": "cid", "status": "pending_approval"})
-    monkeypatch.setattr(onboarding_agent, "get_case_by_idempotency_key", lambda key: {
-        "case_id": "cid", "status": "pending_approval", "role": "backend-eng",
-        "tools": ["github", "aws"], "approver_email": "manager@gsvh.test"})
-
-    r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body["case_id"] == "cid" and body["status"] == "pending_approval"
-    assert body["tools"] == ["github", "aws"]
-    assert calls == {"extract": 0, "graph": 0, "create": 0}
-
-
-def test_a_racing_duplicate_that_slips_past_the_lookup_still_never_re_enters_the_graph(monkeypatch):
-    """Two concurrent submits both miss the pre-check; the UNIQUE key makes create_case
-    return the existing non-draft row. The status guard is the second line of defence."""
-    _enable(monkeypatch)
-    started = []
-    monkeypatch.setattr(onboarding_agent, "create_case", lambda *a, **k: {
-        "case_id": "cid", "status": "pending_approval", "role": "backend-eng",
-        "tools": ["github"], "approver_email": "manager@gsvh.test"})
-    monkeypatch.setattr(onboarding_agent, "start_case",
-                        lambda *a, **k: started.append(k) or {"case_id": "cid", "status": "x"})
-    r = _client().post("/agents/onboarding", json={"text": "backend engineer"})
-    assert r.json()["status"] == "pending_approval"
-    assert started == []
+def test_client_supplied_key_overrides_the_raw_text_hash(monkeypatch):
+    """A client intent key, when present, is authoritative — two differently-worded
+    submits that share one key are one intent."""
+    assert onboarding_agent._idempotency_key({"idempotency_key": "abc"}, "a@x", "one wording") == "abc"
+    assert onboarding_agent._idempotency_key({"idempotency_key": "abc"}, "a@x", "another wording") == "abc"
 
 
 def test_unparseable_request_is_422_and_creates_no_case(monkeypatch):
-    """Ref1 §8: never an unhandled exception. The model returned nothing usable, so the
-    request ends before a Case exists — no half-built Case to clean up."""
+    """Ref1 §8: never an unhandled exception. The filer raises ExtractionFailed when the
+    model returns nothing usable — before a Case exists — and the route maps it to 422."""
     _enable(monkeypatch)
 
-    def _boom(text):
-        raise onboarding_agent.OnboardingExtractError("model returned no extraction")
+    def _boom(*a, **k):
+        raise ExtractionFailed("model returned no extraction")
 
-    monkeypatch.setattr(onboarding_agent, "extract_onboarding_fields", _boom)
-    created = []
-    monkeypatch.setattr(onboarding_agent, "create_case",
-                        lambda *a, **k: created.append(a) or {"case_id": "cid"})
+    monkeypatch.setattr(onboarding_agent, "file_onboarding", _boom)
     r = _client().post("/agents/onboarding", json={"text": "?????"})
     assert r.status_code == 422
-    assert created == []
 
 
 def test_non_approver_decision_rejected(monkeypatch):
@@ -200,62 +168,6 @@ def test_owner_can_read_their_case(monkeypatch):
     assert r.json()["status"] == "provisioned"
     assert r.json()["audit"] == [{"event": "drafted"}]
 
-
-# --- admin routes -----------------------------------------------------------------
-
-def _admin_client(role="hr", email="hr@gsvh.test"):
-    app = FastAPI()
-    app.include_router(onboarding_agent.admin_router)
-    app.dependency_overrides[get_current_user] = lambda: {
-        "id": 9, "email": email, "role": role, "region": "us"}
-    return TestClient(app)
-
-
-def test_replay_is_admin_only(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    r = _admin_client(role="employee", email="newhire@gsvh.test").post(
-        "/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 403
-
-
-def test_replay_rejects_a_case_that_is_not_dead_lettered(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "provisioned"})
-    r = _admin_client().post("/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 409
-
-
-def test_replay_resumes_a_dead_lettered_case(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "get_case",
-                        lambda cid: {"case_id": cid, "status": "dead_letter"})
-    monkeypatch.setattr(onboarding_agent, "replay_case",
-                        lambda *a, **k: {"case_id": "cid", "status": "provisioned", "grant_id": "g1"})
-    r = _admin_client().post("/admin/onboarding/cases/cid/replay")
-    assert r.status_code == 200
-    assert r.json()["status"] == "provisioned"
-
-
-def test_dead_letter_queue_is_listable(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    monkeypatch.setattr(onboarding_agent, "list_dead_letter",
-                        lambda: [{"case_id": "cid", "status": "dead_letter", "attempt": 3}])
-    r = _admin_client().get("/admin/onboarding/dead-letter")
-    assert r.json()["cases"][0]["case_id"] == "cid"
-
-
-def test_breaker_reset_is_explicit_and_admin_only(monkeypatch):
-    monkeypatch.setattr(onboarding_agent, "ONBOARDING_AGENT_ENABLED", True)
-    from backend.core.write.breaker import get_breaker
-    breaker = get_breaker("access-provisioner")
-    for _ in range(breaker.threshold):
-        breaker.record_failure()
-    assert breaker.is_open() is True
-
-    assert _admin_client(role="employee").post("/admin/onboarding/breaker/reset").status_code == 403
-
-    r = _admin_client().post("/admin/onboarding/breaker/reset")
-    assert r.status_code == 200
-    assert r.json()["open"] is False
-    assert get_breaker("access-provisioner").is_open() is False
+# The admin routes (DLQ, replay, breaker reset) moved to the agent-agnostic
+# /admin/write surface once leave and jira could dead-letter too — their coverage now
+# lives in test_write_cases_routes.py.

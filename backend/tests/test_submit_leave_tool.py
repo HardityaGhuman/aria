@@ -1,3 +1,5 @@
+import pytest
+
 from backend.core.hris.mock import MockHRIS
 from backend.core.tools.submit_leave import SubmitLeaveTool
 from backend.core.tools.principal import Principal
@@ -40,8 +42,24 @@ def test_submit_idempotent_via_case_id():
     assert a.data["confirmation_id"] == b.data["confirmation_id"]
 
 
-def test_submit_unknown_employee_returns_error():
+def test_submit_unknown_employee_raises_permanent():
+    """No HRIS record will still be no HRIS record on a retry — permanent, and explicit,
+    so the graph stops instead of burning its budget."""
+    from backend.core.write.errors import PermanentWriteError
+
     tool = SubmitLeaveTool(MockHRIS())
-    res = tool.invoke({"case_id": "c4", "start_date": "2026-08-12", "end_date": "2026-08-14", "days": 3},
-                      _p("nobody@gsvh.test"))
-    assert res.status == "error"
+    with pytest.raises(PermanentWriteError):
+        tool.invoke({"case_id": "c4", "start_date": "2026-08-12", "end_date": "2026-08-14", "days": 3},
+                    _p("nobody@gsvh.test"))
+
+
+def test_connector_errors_propagate_so_only_the_graph_classifies_them():
+    """A tool that catches the exception decides retry-vs-stop by accident. The graph is
+    the only layer allowed to classify a failure."""
+    from backend.core.write.errors import TransientWriteError
+
+    hris = MockHRIS(fail_times=1, fail_with=TransientWriteError)
+    tool = SubmitLeaveTool(hris)
+    with pytest.raises(TransientWriteError):
+        tool.invoke({"case_id": "c1", "start_date": "2026-08-01",
+                     "end_date": "2026-08-02", "days": 1}, _p())

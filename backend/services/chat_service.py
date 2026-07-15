@@ -16,7 +16,7 @@ so existing importers (routes, tests) keep resolving `chat_service.<name>`.
 """
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # pyrefly: ignore [missing-import]
 from fastapi import HTTPException
@@ -73,6 +73,9 @@ class ChatResult:
     # ok | partial | no_results | blocked | refused | tool_unavailable | error —
     # surfaced in the response envelope so the client branches on outcome, not prose.
     status: str = "ok"
+    # Write Cases this turn filed, or the ones awaiting the caller's decision. Empty on
+    # every read turn.
+    cases: list[dict] = field(default_factory=list)
 
 
 def _source_refs(source_dicts: list[dict]) -> tuple[SourceRef, ...]:
@@ -155,6 +158,9 @@ async def generate_chat_reply(
             result = ChatResult(
                 prepared.answer, "", [],
                 status=status,
+                # A write turn is non-streamable: its Cases ride the envelope so the
+                # client renders cards instead of parsing them back out of the prose.
+                cases=prepared.cases,
             )
         else:
             if prepared.tracer:
@@ -285,13 +291,15 @@ async def stream_chat_reply(
     started = time.perf_counter()
     prepared = None
 
-    def _envelope(answer: str, sources: list[dict], status: str) -> dict:
+    def _envelope(answer: str, sources: list[dict], status: str,
+                  cases: list[dict] | None = None) -> dict:
         return {
             "answer": answer,
             "sources": sources,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "session_id": session_id,
             "status": status,
+            "cases": cases or [],
         }
 
     try:
@@ -326,7 +334,13 @@ async def stream_chat_reply(
                 yield {"event": "token", "data": {"delta": answer}}
             if prepared.sse_emits_empty_sources:
                 yield {"event": "sources", "data": {"sources": []}}
-            yield {"event": "done", "data": _envelope(answer, [], final_status)}
+            # A write turn rides this same non-streamable branch: the Cases go out on the
+            # `done` envelope (and, for clients that render incrementally, as their own
+            # event first) so the card is data, never prose the client must re-parse.
+            if prepared.cases:
+                yield {"event": "cases", "data": {"cases": prepared.cases}}
+            yield {"event": "done",
+                   "data": _envelope(answer, [], final_status, prepared.cases)}
             persisted = await _persist_quietly(session_id, message, answer, owner_user_id)
             if prepared.tracer:
                 if persisted:

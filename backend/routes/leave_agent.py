@@ -3,21 +3,26 @@
 The Slack leave write endpoints. n8n calls these; n8n makes NO authz/validation/write
 decision — it verifies the Slack signature at the edge and forwards. Here we re-verify
 the Slack signature, authenticate n8n by shared bearer, resolve a SERVER Principal from
-the verified slack_user_id (never trusting typed identity), drive the write Case, and —
-on the decision endpoint — re-check that the clicking user is the Case's approver. All
-routes are absent (404) unless LEAVE_AGENT_ENABLED."""
+the verified slack_user_id (never trusting typed identity), delegate the filing, and —
+on the decision endpoint — re-check that the clicking user is the Case's approver.
+
+This route is TRANSPORT ONLY. The filing itself — raw-text idempotency, approver
+resolution from the HRIS, the no-manager gate, starting the Case graph — lives in
+services/write_intake.py, the single implementation shared with the chat write lane and
+the other agents. The only leave-specific transport concern left here is translating the
+approver's EMAIL back to a Slack user id for the button payload n8n posts. All routes are
+absent (404) unless LEAVE_AGENT_ENABLED."""
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.config import LEAVE_AGENT_ENABLED
 from backend.core.hris.mock import MockHRIS
-from backend.core.leave_case import create_case, get_case, transition
+from backend.core.leave_case import get_case
 from backend.core.slack_identity import principal_for_slack, slack_user_for_email
 from backend.core.slack_verify import require_n8n_secret, verify_slack_signature
 from backend.routes.deps import open_trace
-from backend.services.leave_extract import extract_leave_fields
-from backend.services.leave_graph import resume_case, start_case
-from backend.services.leave_validator import compute_days
+from backend.services.leave_graph import resume_case
+from backend.services.write_intake import file_leave
 
 # Router-level trace: this edge has no JWT (the caller is n8n, the human is a Slack id),
 # so there is no user to hang the trace on — but the Case's graph events and its extract
@@ -64,21 +69,14 @@ async def start_leave(request: Request):
     if principal is None:
         raise HTTPException(status_code=401, detail="Slack account not linked. Please link it first.")
 
-    fields = extract_leave_fields(payload["text"])
-    days = compute_days(fields["start_date"], fields["end_date"])
-    approver_email = _HRIS.manager_email(principal)
-    idem = f"{principal.email}:{fields['start_date']}:{fields['end_date']}"
-    case = create_case(principal.email, approver_email, fields["start_date"], fields["end_date"],
-                       days, fields["reason"], idem)
-
-    if approver_email is None:
-        transition(case["case_id"], "unroutable", "system", "no manager linked")
-        return {"case_id": str(case["case_id"]), "status": "unroutable"}
-
-    row = start_case(_GRAPH, case_id=str(case["case_id"]), principal=principal,
-                     raw_text=payload["text"], approver_email=approver_email)
-    approver_slack = slack_user_for_email(approver_email) if row["status"] == "pending_approval" else None
-    return {"case_id": str(row["case_id"]), "status": row["status"], "approver_slack_user_id": approver_slack}
+    # file_leave keys off the RAW TEXT (never the model's dates), reads a duplicate rather
+    # than re-driving a parked graph, resolves the approver from the HRIS, and parks at the
+    # gate — the same filing the chat lane runs.
+    filing = file_leave(principal, payload["text"], hris=_HRIS, graph=_GRAPH)
+    approver_slack = (slack_user_for_email(filing.approver_email)
+                      if filing.status == "pending_approval" else None)
+    return {"case_id": filing.case_id, "status": filing.status,
+            "approver_slack_user_id": approver_slack}
 
 
 @router.post("/{case_id}/decision")

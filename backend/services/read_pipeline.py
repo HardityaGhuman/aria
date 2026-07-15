@@ -36,6 +36,7 @@ from backend.core.chat_memory import (
     update_session_summary,
 )
 from backend.core.config import (
+    CHAT_WRITE_ENABLED,
     LLM_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
     QUERY_REWRITE_ENABLED,
@@ -65,8 +66,23 @@ from backend.core.preferences import (
 )
 from backend.core.tools.principal import Principal
 from backend.rag import retrieve_context, rewrite_query
-from backend.services.read_planner import build_plan, validate_plan
+from backend.services.read_planner import (
+    WRITE_INTENTS,
+    agent_for_intent,
+    build_plan,
+    validate_plan,
+)
 from backend.services.supervisor import list_specialists, route, run_specialist
+from backend.services.write_chat import (
+    ExtractionFailed,
+    agent_available,
+    card_from_filing,
+    card_from_row,
+    file_case,
+    list_cases_for_approver,
+    render_approvals,
+    render_filing,
+)
 
 logger = get_logger(__name__)
 
@@ -438,6 +454,9 @@ class PreparedRead:
     answer_req: AnswerRequest | None = None
     tool_results: list[dict] = field(default_factory=list)
     language: str = "English"
+    # Write Cases this turn produced (a filing) or is asking a decision on (the approvals
+    # lane). Empty on every read turn, so the envelope is unchanged for read traffic.
+    cases: list[dict] = field(default_factory=list)
     # §6a: the per-request boundary tracer, created in prepare_read. The transports
     # reuse it to emit the lifecycle-end events (answer_completed / request_completed /
     # request_failed / exchange_persisted) they alone know the timing of.
@@ -503,6 +522,66 @@ def finalize_answer(prepared: PreparedRead, full_answer: str) -> FinalizedAnswer
     return FinalizedAnswer(TerminalState.OK, full_answer, sources)
 
 
+def _write_lane_or_read(classification: str) -> str:
+    """Keep a write lane only if this process can honour it; otherwise fall back to the
+    read table. Two ways a lane dies here: the master switch is off (the model was never
+    even offered the write labels, so this is belt-and-braces), or the agent it routes to
+    is not registered (kill switch off / not built). Either way the user gets today's
+    grounded answer instead of a promise nothing can keep."""
+    if classification not in WRITE_INTENTS:
+        return classification
+    if not CHAT_WRITE_ENABLED:
+        return "policy"
+    agent = agent_for_intent(classification)
+    if agent is not None and not agent_available(agent):
+        return "policy"
+    return classification
+
+
+async def _prepare_write(classification: str, message: str, principal: Principal,
+                         plan: ReadPlan, tracer: BoundaryTracer) -> PreparedRead:
+    """File a Case, or list the ones awaiting this caller's decision.
+
+    Everything a write lane can go wrong with degrades to a spoken failure, never a 500:
+    the model may fail to extract usable fields, and the connector/DB may be down. The
+    Case, if it exists at all, is the source of truth for what happened — this function
+    only reports it."""
+    if classification == "approvals":
+        rows = await asyncio.to_thread(list_cases_for_approver, principal.email)
+        cards = [card_from_row(row, principal.email) for row in rows]
+        return PreparedRead(
+            classification=classification, plan=plan, streamable=False,
+            terminal=TerminalState.OK, answer=render_approvals(cards),
+            cases=cards, tracer=tracer,
+        )
+
+    agent = agent_for_intent(classification)
+    try:
+        filing = await asyncio.to_thread(file_case, agent, principal, message)
+    except ExtractionFailed:
+        return PreparedRead(
+            classification=classification, plan=plan, streamable=False,
+            terminal=TerminalState.NO_RESULTS, tracer=tracer,
+            answer=("I couldn't work out the details of that request, so I haven't filed "
+                    "anything. Could you say it again with the specifics?"),
+        )
+    except Exception:                     # a connector or the DB is down — say so plainly
+        logger.exception("write lane %s failed to file a case", classification)
+        return PreparedRead(
+            classification=classification, plan=plan, streamable=False,
+            terminal=TerminalState.NO_RESULTS, tracer=tracer,
+            answer=("I couldn't file that request just now — the system behind it didn't "
+                    "respond. Nothing was written. Please try again in a moment."),
+        )
+
+    card = card_from_filing(filing, principal.email)
+    return PreparedRead(
+        classification=classification, plan=plan, streamable=False,
+        terminal=TerminalState.OK, answer=render_filing(filing), cases=[card],
+        tracer=tracer,
+    )
+
+
 async def prepare_read(
     session_id: str,
     message: str,
@@ -555,6 +634,11 @@ async def prepare_read(
         timeout_detail="The language model timed out while classifying the request. Please try again.",
     )
 
+    # A write lane only survives if this process can actually honour it. Otherwise it
+    # normalizes back to a read lane BEFORE the plan is built, so a disabled (or missing)
+    # write agent degrades to today's grounded answer instead of erroring the chat.
+    classification = _write_lane_or_read(classification)
+
     tracer.intent_classified(classification)
     plan = build_plan(classification)
     tracer.plan_built(plan)
@@ -579,6 +663,12 @@ async def prepare_read(
             terminal=TerminalState.REFUSED, answer=_localized_refusal(language),
             language=language, tracer=tracer,
         )
+
+    # --- the write lanes. The reply is the Case, so there is nothing to stream and no
+    # answer model to run: a pending write's state is a fact, and paraphrasing facts
+    # through a model is how a system starts lying about what it did.
+    if classification in WRITE_INTENTS and principal is not None:
+        return await _prepare_write(classification, message, principal, plan, tracer)
 
     if classification == "chitchat":
         # Precompute — both transports deliver it whole (SSE as a single token event).

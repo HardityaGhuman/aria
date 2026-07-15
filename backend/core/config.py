@@ -85,6 +85,13 @@ MAX_TOOL_STEPS = int(os.getenv("MAX_TOOL_STEPS", "3"))
 # synthesis (get_llm_response) is always the large model.
 AGENT_READ_MODEL = os.getenv("AGENT_READ_MODEL", ROUTER_MODEL_NAME)
 
+# --- Chat write lane: the chat files Cases and carries the approval gate ---
+# The product north star: a person TALKS to Aria and the agents act. false ⇒ the read
+# pipeline is byte-identical to the read-only build (classifier prompt, plan table, and
+# branches all unchanged) — this is the rollback switch for the one change that touches
+# the shipped read path.
+CHAT_WRITE_ENABLED = os.getenv("CHAT_WRITE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
 # --- Write Slice 1: Slack Leave Self-Service (HITL-gated write) ---
 # Master switch. false ⇒ leave routers unmounted, no write path exists.
 LEAVE_AGENT_ENABLED = os.getenv("LEAVE_AGENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")

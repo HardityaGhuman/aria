@@ -2,44 +2,45 @@
 ------------------
 Our workflow-state projection of a work request — NOT the Jira issue itself (that lives
 in the tracker). Two tables: `jira_cases` (queryable status) and `jira_case_audit`
-(append-only transition log). Mirrors leave_case.py; distinct from the LangGraph
-checkpointer (the graph's resume state).
+(append-only transition log). Distinct from the LangGraph checkpointer (the graph's
+resume state).
 
-The state machine is enforced here: `transition` rejects any change not in
-LEGAL_TRANSITIONS and writes the audit row in the SAME transaction as the status update,
-so status and audit can never diverge."""
-from dataclasses import dataclass
+The lifecycle and the transition engine now live in `core/write/case_store.py`; this
+module owns only the table shape, the agent's spec, and the typed business columns.
 
-# pyrefly: ignore [missing-import]
-import psycopg
-# pyrefly: ignore [missing-import]
-from psycopg.rows import dict_row
-
+Two schema debts are paid here. `risk_tier` is dropped — it was never read and never
+written, and a column nothing reads is a lie about what the system enforces. And Jira's
+private status dialect (`denied_validation` / `denied_approver`) is renamed to the shared
+`denied_policy` / `denied_manager`, because one vocabulary is what lets a single DLQ and
+a single approvals inbox group Cases across all three agents.
+"""
 from backend.core import db
+from backend.core.write import case_store
+from backend.core.write.case_store import CaseSpec, WriteCaseError
 
-# Exhaustive, one-way lifecycle. Terminal statuses map to an empty set.
-LEGAL_TRANSITIONS: dict[str, set[str]] = {
-    "draft": {"pending_approval", "denied_validation", "unroutable"},
-    "pending_approval": {"approved", "denied_approver"},
-    "approved": {"created", "write_failed"},
-    "denied_validation": set(),
-    "unroutable": set(),
-    "denied_approver": set(),
-    "created": set(),
-    "write_failed": set(),
-}
+JIRA_SPEC = CaseSpec(
+    agent="jira",
+    table="jira_cases",
+    audit_table="jira_case_audit",
+    success_status="created",
+    result_column="issue_key",
+    summary_columns=("project", "issue_type", "summary"),
+)
 
-
-@dataclass
-class JiraCaseError(Exception):
-    message: str
+# Back-compat aliases: callers and tests still import these names.
+JiraCaseError = WriteCaseError
+LEGAL_TRANSITIONS = JIRA_SPEC.legal_transitions()
 
 
 def _connect():
-    return db.pooled(lambda: JiraCaseError("Could not connect to PostgreSQL for jira cases."))
+    return db.pooled(lambda: WriteCaseError("Could not connect to PostgreSQL for jira cases."))
 
 
 def initialize_jira_case_tables() -> None:
+    """Idempotent startup DDL — re-runnable on every boot. The ALTERs + UPDATEs are the
+    migration. Order matters: the old CHECK constraint does not know the new status words,
+    so it must be DROPPED before the UPDATEs rewrite them, and re-added afterwards."""
+    statuses = ", ".join(f"'{s}'" for s in JIRA_SPEC.statuses())
     with _connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -52,17 +53,33 @@ def initialize_jira_case_tables() -> None:
                     issue_type      TEXT,
                     summary         TEXT NOT NULL,
                     description     TEXT,
-                    risk_tier       TEXT NOT NULL DEFAULT 'standard',
-                    status          TEXT NOT NULL DEFAULT 'draft'
-                        CHECK (status IN ('draft','pending_approval','denied_validation',
-                                          'unroutable','approved','denied_approver',
-                                          'created','write_failed')),
+                    status          TEXT NOT NULL DEFAULT 'draft',
                     idempotency_key TEXT NOT NULL UNIQUE,
                     issue_key       TEXT,
+                    attempt         INTEGER NOT NULL DEFAULT 0,
+                    failure_reason  TEXT,
                     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cursor.execute(
+                "ALTER TABLE jira_cases ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 0"
+            )
+            cursor.execute("ALTER TABLE jira_cases ADD COLUMN IF NOT EXISTS failure_reason TEXT")
+            cursor.execute("ALTER TABLE jira_cases DROP COLUMN IF EXISTS risk_tier")
+            cursor.execute(
+                "ALTER TABLE jira_cases DROP CONSTRAINT IF EXISTS jira_cases_status_check"
+            )
+            cursor.execute(
+                "UPDATE jira_cases SET status = 'denied_policy' WHERE status = 'denied_validation'"
+            )
+            cursor.execute(
+                "UPDATE jira_cases SET status = 'denied_manager' WHERE status = 'denied_approver'"
+            )
+            cursor.execute(
+                f"ALTER TABLE jira_cases ADD CONSTRAINT jira_cases_status_check "
+                f"CHECK (status IN ({statuses}))"
             )
             cursor.execute(
                 """
@@ -79,79 +96,35 @@ def initialize_jira_case_tables() -> None:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jira_case_audit_case ON jira_case_audit (case_id, id)"
             )
+            # The DLQ is a query, so give it an index.
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jira_cases_status ON jira_cases (status)"
+            )
 
 
-def create_case(employee_email, approver_email, project, issue_type, summary, description, idempotency_key) -> dict:
-    """Insert a draft Case. On idempotency_key collision, return the existing row
-    (no second draft, no second audit row)."""
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO jira_cases
-                        (employee_email, approver_email, project, issue_type, summary, description, idempotency_key)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (employee_email, approver_email, project, issue_type, summary, description, idempotency_key),
-                )
-                row = dict(cursor.fetchone())
-                cursor.execute(
-                    "INSERT INTO jira_case_audit (case_id, event, actor_id, detail) VALUES (%s,%s,%s,%s)",
-                    (row["case_id"], "drafted", employee_email, f"{project}/{issue_type}: {summary}"),
-                )
-                return row
-            except psycopg.errors.UniqueViolation:
-                connection.rollback()
-                cursor.execute("SELECT * FROM jira_cases WHERE idempotency_key = %s", (idempotency_key,))
-                return dict(cursor.fetchone())
+def create_case(employee_email, approver_email, project, issue_type, summary, description,
+                idempotency_key) -> dict:
+    return case_store.create_case(
+        JIRA_SPEC, employee_email, approver_email, idempotency_key,
+        project=project, issue_type=issue_type, summary=summary, description=description,
+    )
 
 
 def get_case(case_id: str) -> dict | None:
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("SELECT * FROM jira_cases WHERE case_id = %s", (case_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+    return case_store.get_case(JIRA_SPEC, case_id)
 
 
-def transition(case_id, new_status, actor_id, detail, *, issue_key=None) -> dict:
-    """Move a Case to new_status iff the transition is legal, appending an audit row
-    in the same transaction. Raises JiraCaseError on an illegal or unknown-case move."""
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("SELECT status FROM jira_cases WHERE case_id = %s FOR UPDATE", (case_id,))
-            current = cursor.fetchone()
-            if current is None:
-                raise JiraCaseError(f"no such case {case_id}")
-            cur_status = current["status"]
-            if new_status not in LEGAL_TRANSITIONS.get(cur_status, set()):
-                raise JiraCaseError(f"illegal transition {cur_status} -> {new_status}")
-            cursor.execute(
-                """
-                UPDATE jira_cases
-                SET status = %s,
-                    issue_key = COALESCE(%s, issue_key),
-                    updated_at = now()
-                WHERE case_id = %s
-                RETURNING *
-                """,
-                (new_status, issue_key, case_id),
-            )
-            row = dict(cursor.fetchone())
-            cursor.execute(
-                "INSERT INTO jira_case_audit (case_id, event, actor_id, detail) VALUES (%s,%s,%s,%s)",
-                (case_id, new_status, actor_id, detail),
-            )
-            return row
+def get_case_by_idempotency_key(idempotency_key: str) -> dict | None:
+    return case_store.get_by_idempotency_key(JIRA_SPEC, idempotency_key)
+
+
+def transition(case_id, new_status, actor_id, detail, *, issue_key=None,
+               attempt=None, failure_reason=None) -> dict:
+    return case_store.transition(
+        JIRA_SPEC, case_id, new_status, actor_id, detail,
+        issue_key=issue_key, attempt=attempt, failure_reason=failure_reason,
+    )
 
 
 def list_audit(case_id: str) -> list[dict]:
-    with _connect() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                "SELECT event, actor_id, detail, created_at FROM jira_case_audit WHERE case_id = %s ORDER BY id",
-                (case_id,),
-            )
-            return [dict(r) for r in cursor.fetchall()]
+    return case_store.list_audit(JIRA_SPEC, case_id)

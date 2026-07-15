@@ -58,6 +58,28 @@ register_error_handlers(app)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
+def _register_write_agents(*, leave_graph=None, jira_graph=None, onboarding_graph=None) -> None:
+    """One registry entry per ENABLED write agent — the lookup that lets /agents/cases and
+    /admin/write/* be agent-agnostic instead of importing three graphs and branching on
+    strings. A kill switch that is off means the agent's routes are absent AND its Cases are
+    invisible to the cross-agent surfaces, which is what "off" has to mean."""
+    from backend.core.jira_case import JIRA_SPEC
+    from backend.core.leave_case import LEAVE_SPEC
+    from backend.core.onboarding_case import ONBOARDING_SPEC
+    from backend.services import jira_graph as jg
+    from backend.services import leave_graph as lg
+    from backend.services import onboarding_graph as og
+    from backend.services.write_agents import WriteAgent, register
+
+    if LEAVE_AGENT_ENABLED and leave_graph is not None:
+        register(WriteAgent("leave", LEAVE_SPEC, leave_graph, lg.replay_case, lg.resume_case))
+    if JIRA_AGENT_ENABLED and jira_graph is not None:
+        register(WriteAgent("jira", JIRA_SPEC, jira_graph, jg.replay_case, jg.resume_case))
+    if ONBOARDING_AGENT_ENABLED and onboarding_graph is not None:
+        register(WriteAgent("onboarding", ONBOARDING_SPEC, onboarding_graph, og.replay_case,
+                            og.resume_case))
+
+
 @app.on_event("startup")
 async def startup_event():
     """Prepare chat memory and verify the prebuilt vector index is present.
@@ -134,6 +156,12 @@ async def startup_event():
         set_onboarding_hris(MockHRIS())
         logger.info("Onboarding write agent ready (ONBOARDING_AGENT_ENABLED=true).")
 
+    _register_write_agents(
+        leave_graph=graph if LEAVE_AGENT_ENABLED else None,
+        jira_graph=jira_graph if JIRA_AGENT_ENABLED else None,
+        onboarding_graph=onboarding_graph if ONBOARDING_AGENT_ENABLED else None,
+    )
+
     chunk_count = get_repository().count()
     if chunk_count == 0:
         logger.warning(
@@ -171,10 +199,15 @@ if JIRA_AGENT_ENABLED:
     app.include_router(jira_agent_router)
 
 if ONBOARDING_AGENT_ENABLED:
-    from backend.routes.onboarding_agent import admin_router as onboarding_admin_router
     from backend.routes.onboarding_agent import router as onboarding_agent_router
     app.include_router(onboarding_agent_router)
-    app.include_router(onboarding_admin_router)
+
+# The cross-agent surfaces: the requester's Cases, the approver's inbox, and one admin
+# DLQ/breaker board for every agent at once. Mounted if ANY write agent is on.
+if LEAVE_AGENT_ENABLED or JIRA_AGENT_ENABLED or ONBOARDING_AGENT_ENABLED:
+    from backend.routes import write_cases
+    app.include_router(write_cases.router)
+    app.include_router(write_cases.admin_router)
 
 @app.get("/health")
 def health_check():
